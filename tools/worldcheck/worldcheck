@@ -1,0 +1,923 @@
+#!/usr/bin/env ruby
+
+require "date"
+require "digest"
+require "fileutils"
+require "json"
+require "open3"
+require "optparse"
+require "pathname"
+require "set"
+require "time"
+require "yaml"
+
+module Worldcheck
+  CONFIG_VERSION = 1
+  STATE_VERSION = 2
+  PACKET_VERSION = "1.0".freeze
+  RECEIPT_VERSION = "1.0".freeze
+  VERDICTS = %w[pass mixed fail author-required insufficient-evidence].freeze
+  BLOCKING_VERDICTS = %w[mixed fail author-required].freeze
+
+  class Failure < StandardError
+    attr_reader :code
+
+    def initialize(code, message)
+      @code = code
+      super(message)
+    end
+  end
+
+  module Util
+    module_function
+
+    def normalized_text(text)
+      text.encode("UTF-8").gsub("\r\n", "\n").gsub("\r", "\n").unicode_normalize(:nfc)
+    end
+
+    def sorted(value)
+      case value
+      when Hash
+        value.keys.sort.each_with_object({}) { |key, result| result[key] = sorted(value[key]) }
+      when Array
+        value.map { |item| sorted(item) }
+      else
+        value
+      end
+    end
+
+    def json(value)
+      JSON.generate(sorted(value))
+    end
+
+    def hash(value)
+      "sha256:#{Digest::SHA256.hexdigest(value.is_a?(String) ? value : json(value))}"
+    end
+
+    def atomic_write(path, content)
+      FileUtils.mkdir_p(File.dirname(path))
+      temp = File.join(File.dirname(path), ".#{File.basename(path)}.#{Process.pid}.tmp")
+      File.open(temp, "wb", 0o600) do |file|
+        file.write(content)
+        file.flush
+        file.fsync
+      end
+      File.rename(temp, path)
+    ensure
+      File.delete(temp) if temp && File.exist?(temp)
+    end
+
+    def key(value)
+      value.to_s.strip.unicode_normalize(:nfc).downcase
+    end
+
+    def anchor(text, line_index = 0)
+      lines = text.lines
+      line_index.downto(0) do |index|
+        match = lines[index].to_s.match(/^\s{0,3}(#{'#'}{1,6})\s+(.+?)\s*$/)
+        return match[2].sub(/\s+#+\s*$/, "") if match
+      end
+      "文首"
+    end
+  end
+
+  Page = Struct.new(:source_id, :path, :title, :text, :body, :frontmatter, :aliases, :links, :content_hash)
+
+  class Project
+    attr_reader :id, :root, :content_root, :page_globs, :policy_files, :dependency_file, :full_gate_argv
+
+    def self.load(config_path)
+      absolute = File.expand_path(config_path)
+      data = JSON.parse(File.read(absolute, encoding: "UTF-8"))
+      new(File.dirname(File.realpath(absolute)), data)
+    rescue Errno::ENOENT, JSON::ParserError, TypeError => e
+      raise Failure.new("config-invalid", "无法读取 Worldcheck 配置：#{e.message}")
+    end
+
+    def initialize(root, data)
+      raise Failure.new("config-invalid", "配置必须是 JSON object") unless data.is_a?(Hash)
+      allowed = %w[schema_version project_id content_root page_globs policy_files dependency_file full_gate]
+      required = %w[schema_version project_id content_root page_globs policy_files]
+      raise Failure.new("config-invalid", "配置缺少字段：#{(required - data.keys).join(', ')}") unless (required - data.keys).empty?
+      raise Failure.new("config-invalid", "配置含未知字段：#{(data.keys - allowed).join(', ')}") unless (data.keys - allowed).empty?
+      raise Failure.new("config-version-invalid", "schema_version 必须为 #{CONFIG_VERSION}") unless data["schema_version"] == CONFIG_VERSION
+      @id = data["project_id"]
+      raise Failure.new("project-id-invalid", "project_id 格式无效") unless @id.is_a?(String) && @id.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/)
+      @root = File.realpath(root)
+      @content_root = resolve(data["content_root"], directory: true)
+      @page_globs = data["page_globs"]
+      unless @page_globs.is_a?(Array) && !@page_globs.empty? && @page_globs.all? { |item| valid_relative?(item) }
+        raise Failure.new("page-globs-invalid", "page_globs 必须是非空相对路径数组")
+      end
+      files = data["policy_files"]
+      raise Failure.new("policy-files-invalid", "policy_files 必须是相对路径数组") unless files.is_a?(Array) && files.all? { |item| valid_relative?(item) }
+      @dependency_file = data["dependency_file"]
+      if @dependency_file && !valid_relative?(@dependency_file)
+        raise Failure.new("dependency-file-invalid", "dependency_file 必须是相对路径")
+      end
+      names = (files + Array(@dependency_file)).map { |item| File.basename(item) }
+      raise Failure.new("policy-files-invalid", "policy 文件名必须唯一") unless names.uniq.length == names.length
+      @policy_files = (files + Array(@dependency_file)).uniq.map { |item| [item, resolve(item)] }
+      @full_gate_argv = parse_gate(data["full_gate"])
+    end
+
+    def inside?(path, boundary = @root)
+      path == boundary || path.start_with?(boundary + File::SEPARATOR)
+    end
+
+    private
+
+    def valid_relative?(value)
+      return false unless value.is_a?(String) && !value.empty? && !value.include?("\0")
+      path = Pathname.new(value)
+      !path.absolute? && !path.each_filename.include?("..")
+    end
+
+    def resolve(value, directory: false)
+      raise Failure.new("path-invalid", "配置路径必须是相对项目根路径") unless valid_relative?(value)
+      path = File.expand_path(value, @root)
+      raise Failure.new("path-outside-project", "配置路径越过项目根") unless inside?(path)
+      if File.exist?(path) || File.symlink?(path)
+        real = File.realpath(path)
+        raise Failure.new("path-outside-project", "配置路径的符号链接越过项目根") unless inside?(real)
+        path = real
+      end
+      raise Failure.new("path-invalid", "content_root 不是目录") if directory && !File.directory?(path)
+      path
+    end
+
+    def parse_gate(value)
+      return nil if value.nil?
+      unless value.is_a?(Hash) && value.keys == ["argv"] && value["argv"].is_a?(Array) && !value["argv"].empty? && value["argv"].all? { |item| item.is_a?(String) && !item.empty? }
+        raise Failure.new("full-gate-invalid", "full_gate 只能包含非空 argv 数组")
+      end
+      value["argv"].each do |item|
+        next if item.start_with?("-") || !item.include?(File::SEPARATOR)
+        resolve(item)
+      end
+      value["argv"].freeze
+    end
+  end
+
+  class Scanner
+    attr_reader :pages, :by_title, :by_name, :issues, :manifest_hash, :policy_hash, :policies
+
+    def initialize(project)
+      @project = project
+      @pages = {}
+      @by_title = Hash.new { |hash, key| hash[key] = [] }
+      @by_name = Hash.new { |hash, key| hash[key] = [] }
+      @issues = []
+      @policies = {}
+    end
+
+    def run
+      scan_pages
+      scan_policies
+      @manifest_hash = Util.hash(@pages.keys.sort.map { |id| [id, @pages[id].content_hash, @pages[id].title] })
+      @policy_hash = Util.hash(@policies.keys.sort.map { |id| [id, @policies[id]["content_hash"]] })
+      self
+    end
+
+    private
+
+    def scan_pages
+      patterns = @project.page_globs.map { |glob| File.join(@project.content_root, glob) }
+      patterns.flat_map { |pattern| Dir.glob(pattern) }.sort.uniq.each do |path|
+        begin
+          real = File.realpath(path)
+          unless @project.inside?(real, @project.content_root)
+            issue("path-outside-project", relative(path), "符号链接越过 content_root 边界")
+            next
+          end
+          before = File.stat(path)
+          text = Util.normalized_text(File.read(path, encoding: "UTF-8"))
+          after = File.stat(path)
+          if before.size != after.size || before.mtime != after.mtime || before.ino != after.ino
+            issue("unstable-source", relative(path), "读取期间页面发生变化")
+            next
+          end
+          source_id = relative(path)
+          frontmatter, body = parse_frontmatter(source_id, text)
+          title = frontmatter["title"] if frontmatter.is_a?(Hash)
+          unless title.is_a?(String) && !title.strip.empty?
+            issue("page-title-missing", source_id, "页面缺少可用 title")
+            title = File.basename(path, ".md")
+          end
+          aliases = Array(frontmatter.is_a?(Hash) ? frontmatter["aliases"] : []).select { |item| item.is_a?(String) }
+          links = body.scan(/\[\[([^\]]+)\]\]/).flatten.map { |raw| raw.split("|", 2).first.split("#", 2).first.strip }.reject(&:empty?).uniq
+          page = Page.new(source_id, real, title, text, body, frontmatter || {}, aliases, links, Util.hash(text))
+          @pages[source_id] = page
+          @by_title[Util.key(title)] << page
+          ([title] + aliases).each { |name| @by_name[Util.key(name)] << page }
+        rescue Errno::ENOENT
+          issue("unstable-source", relative(path), "页面在读取期间消失")
+        rescue EncodingError => e
+          issue("source-encoding-invalid", relative(path), e.message)
+        end
+      end
+      @by_title.each_value do |matches|
+        issue("title-duplicate", matches.last.source_id, "title 与 #{matches.first.source_id} 重复") if matches.length > 1
+      end
+      @by_name.each do |name, matches|
+        unique = matches.map(&:source_id).uniq
+        issue("target-name-duplicate", unique.last, "标题或 alias #{name.inspect} 不能唯一定位") if unique.length > 1
+      end
+    end
+
+    def scan_policies
+      entries = {}
+      @project.policy_files.each do |relative, path|
+        name = File.basename(relative)
+        unless File.file?(path)
+          issue("policy-missing", relative, "缺少政策文件")
+          next
+        end
+        unless @project.inside?(File.realpath(path))
+          issue("policy-outside-project", relative, "政策文件符号链接越过项目根")
+          next
+        end
+        entries[name] = Util.normalized_text(File.read(path, encoding: "UTF-8"))
+      end
+      entries.each do |name, text|
+        @policies[name] = {"source_id" => "policy/#{name}", "content_hash" => Util.hash(text), "text" => text}
+      end
+    end
+
+    def parse_frontmatter(source_id, text)
+      match = text.match(/\A---\s*\n(.*?)\n---\s*\n/m)
+      unless match
+        issue("frontmatter-missing", source_id, "页面缺少 YAML Frontmatter")
+        return [{}, text]
+      end
+      data = YAML.safe_load(match[1], [Date], [], false)
+      unless data.is_a?(Hash)
+        issue("frontmatter-invalid", source_id, "Frontmatter 必须是键值对象")
+        data = {}
+      end
+      [data, text[match.end(0)..-1] || ""]
+    rescue StandardError => e
+      issue("frontmatter-invalid", source_id, e.message)
+      [{}, text]
+    end
+
+    def relative(path)
+      Pathname.new(path).relative_path_from(Pathname.new(@project.content_root)).to_s
+    rescue ArgumentError
+      path.to_s
+    end
+
+    def issue(code, source_id, message)
+      @issues << {"code" => code, "source_id" => source_id, "message" => message}
+    end
+  end
+
+  class Store
+    attr_reader :root
+
+    def initialize(project_id, root = nil)
+      @root = root || File.join(Dir.home, "Library", "Application Support", "worldcheck", project_id)
+      @state_path = File.join(@root, "state.json")
+      @lock_path = File.join(@root, "worldcheck.lock")
+    end
+
+    def load
+      return nil unless File.exist?(@state_path)
+      state = JSON.parse(File.read(@state_path, encoding: "UTF-8"))
+      raise Failure.new("state-version-unsupported", "state.json 必须是 v#{STATE_VERSION}，请重新建立 baseline") unless state["schema_version"] == STATE_VERSION
+      state
+    rescue JSON::ParserError, TypeError => e
+      raise Failure.new("state-corrupt", "state.json 损坏，请重新建立 baseline：#{e.message}")
+    end
+
+    def locked
+      FileUtils.mkdir_p(@root)
+      File.open(@lock_path, File::RDWR | File::CREAT, 0o600) do |lock|
+        lock.flock(File::LOCK_EX)
+        yield
+      end
+    end
+
+    def save(state)
+      Util.atomic_write(@state_path, Util.json(state) + "\n")
+    end
+
+    def save_packet(packet)
+      path = packet_path(packet.fetch("packet_hash"))
+      Util.atomic_write(path, Util.json(packet) + "\n") unless File.exist?(path)
+      path
+    end
+
+    def packet(hash)
+      path = packet_path(hash)
+      raise Failure.new("packet-not-found", "找不到 packet #{hash}") unless File.file?(path)
+      JSON.parse(File.read(path, encoding: "UTF-8"))
+    rescue JSON::ParserError => e
+      raise Failure.new("packet-corrupt", "Packet 损坏：#{e.message}")
+    end
+
+    def append_receipt(receipt)
+      FileUtils.mkdir_p(@root)
+      File.open(File.join(@root, "receipts.jsonl"), "ab", 0o600) do |file|
+        file.write(Util.json(receipt) + "\n")
+        file.flush
+        file.fsync
+      end
+    end
+
+    private
+
+    def packet_path(hash)
+      raise Failure.new("packet-hash-invalid", "packet hash 格式无效") unless hash.to_s.match?(/\Asha256:[0-9a-f]{64}\z/)
+      File.join(@root, "packets", "#{hash.sub('sha256:', '')}.json")
+    end
+  end
+
+  class App
+    attr_reader :project, :store
+
+    def initialize(project, state_root = nil)
+      @project = project
+      @store = Store.new(project.id, state_root)
+    end
+
+    def check(targets, full: false)
+      scan = Scanner.new(@project).run
+      return blocked("check", scan.issues, 1) unless scan.issues.empty?
+      if full
+        return @store.locked { full_check(scan) }
+      end
+      state = @store.load
+      return blocked("check", [issue("baseline-required", "请先运行 worldcheck check --full")], 1) unless state
+      ensure_state_vault(state)
+      comparison = compare(scan, state, targets)
+      issues = comparison["issues"]
+      stale = stale_receipts(scan, state)
+      blockers = Array(state["unresolved_receipts"])
+      if state["policy_hash"] != scan.policy_hash
+        issues << issue("full-gate-required", "政策或核心契约已变化，必须运行 check --full")
+      end
+      issues << issue("review-required", "存在尚未形成当前语义 receipt 的页面变化") unless comparison["changes"].empty?
+      issues << issue("receipt-stale", "已有语义 receipt 因页面或政策变化失效") unless stale.empty?
+      issues << issue("semantic-blocker", "存在 mixed、fail 或 author-required receipt") unless blockers.empty?
+      result("check", issues.empty? ? 0 : 1, comparison.merge("issues" => issues, "policy_hash" => scan.policy_hash, "stale_receipts" => stale, "unresolved_receipts" => blockers))
+    end
+
+    def review(targets, budget_chars: 50_000)
+      raise Failure.new("budget-invalid", "budget_chars 至少为 2000") unless budget_chars.is_a?(Integer) && budget_chars >= 2000
+      scan = Scanner.new(@project).run
+      return blocked("review", scan.issues, 1) unless scan.issues.empty?
+      state = @store.load
+      return blocked("review", [issue("baseline-required", "请先运行 worldcheck check --full")], 1) unless state
+      ensure_state_vault(state)
+      return blocked("review", [issue("full-gate-required", "政策变化后必须先运行 check --full")], 1) if state["policy_hash"] != scan.policy_hash
+      comparison = compare(scan, state, targets)
+      packet = build_packet(scan, state, comparison, budget_chars)
+      @store.locked { @store.save_packet(packet) }
+      code = packet["reviewability"] == "ready" ? 0 : 1
+      result("review", code, {"packet" => packet, "issues" => comparison["issues"]})
+    end
+
+    def record(receipt_input)
+      receipt = validate_receipt_shape(receipt_input)
+      @store.locked do
+        scan = Scanner.new(@project).run
+        return blocked("review-record", scan.issues, 1) unless scan.issues.empty?
+        state = @store.load
+        raise Failure.new("baseline-required", "请先运行 worldcheck check --full") unless state
+        ensure_state_vault(state)
+        packet = @store.packet(receipt.fetch("packet_hash"))
+        if packet["head_manifest_hash"] != scan.manifest_hash || packet["policy_hash"] != scan.policy_hash
+          return result("review-record", 1, {"recorded" => false, "status" => "stale", "issues" => [issue("receipt-stale", "世界书或政策在 packet 生成后发生变化")]})
+        end
+        validate_receipt_evidence(receipt, packet)
+        insufficient = packet["reviewability"] == "insufficient-evidence" || !Array(receipt["omissions"]).empty?
+        if insufficient != (receipt["verdict"] == "insufficient-evidence")
+          raise Failure.new("receipt-verdict-invalid", "required omission 与 verdict 不一致")
+        end
+        stored = Util.sorted(receipt.merge("receipt_id" => Util.hash(receipt.reject { |key, _value| key == "receipt_id" })))
+        @store.append_receipt(stored)
+        advance_state(state, scan, packet, stored) unless receipt["verdict"] == "insufficient-evidence"
+        @store.save(state) unless receipt["verdict"] == "insufficient-evidence"
+        result("review-record", receipt["verdict"] == "pass" ? 0 : 1, {"recorded" => true, "status" => receipt["verdict"], "receipt_id" => stored["receipt_id"], "issues" => []})
+      end
+    end
+
+    def status(target = nil)
+      scan = Scanner.new(@project).run
+      return blocked("status", scan.issues, 1) unless scan.issues.empty?
+      state = @store.load
+      return blocked("status", [issue("baseline-required", "请先运行 worldcheck check --full")], 1) unless state
+      ensure_state_vault(state)
+      comparison = compare(scan, state, target ? [target] : [])
+      blockers = Array(state["unresolved_receipts"])
+      if target
+        resolved = resolve_targets(scan, state, [target])
+        titles = resolved.map { |id| scan.pages[id] && scan.pages[id].title }.compact
+        blockers = blockers.select { |blocker| !(Array(blocker["targets"]) & titles).empty? }
+      end
+      stale = stale_receipts(scan, state)
+      issues = comparison["issues"].dup
+      issues << issue("full-gate-required", "政策或核心契约已变化") if state["policy_hash"] != scan.policy_hash
+      issues << issue("review-required", "存在未复核变化") unless comparison["changes"].empty?
+      issues << issue("semantic-blocker", "存在 mixed、fail 或 author-required receipt") unless blockers.empty?
+      issues << issue("receipt-stale", "已有语义 receipt 因页面变化失效") unless stale.empty?
+      payload = comparison.merge(
+        "issues" => issues,
+        "checkpoint_manifest_hash" => state["checkpoint_manifest_hash"],
+        "head_manifest_hash" => scan.manifest_hash,
+        "policy_hash" => scan.policy_hash,
+        "baseline_sources" => state.fetch("pages", {}).values.group_by { |page| page["source"] }.transform_values(&:length),
+        "unresolved_receipts" => blockers,
+        "stale_receipts" => stale
+      )
+      result("status", issues.empty? ? 0 : 1, payload)
+    end
+
+    private
+
+    def full_check(scan)
+      gate = {"status" => "not-configured"}
+      if @project.full_gate_argv
+        stdout, stderr, status = Open3.capture3(*@project.full_gate_argv, chdir: @project.root)
+        gate = {"status" => status.success? ? "passed" : "failed", "exit_code" => status.exitstatus, "stdout" => stdout, "stderr" => stderr}
+        unless status.success?
+          return result("check", 1, {"issues" => [issue("full-gate-failed", "配置的完整门禁未通过")], "full_gate" => gate})
+        end
+      end
+      after = Scanner.new(@project).run
+      unless after.issues.empty? && after.manifest_hash == scan.manifest_hash && after.policy_hash == scan.policy_hash
+        return blocked("check", [issue("unstable-source", "世界书在完整门禁期间发生变化，未建立 checkpoint")], 1)
+      end
+      state = checkpoint_state(after)
+      @store.save(state)
+      result("check", 0, {"issues" => [], "checkpoint_manifest_hash" => after.manifest_hash, "pages" => after.pages.length, "full_gate" => gate})
+    end
+
+    def checkpoint_state(scan)
+      {
+        "schema_version" => STATE_VERSION,
+        "project_id" => @project.id,
+        "checkpoint_manifest_hash" => scan.manifest_hash,
+        "policy_hash" => scan.policy_hash,
+        "updated_at" => Time.now.utc.iso8601,
+        "pages" => scan.pages.keys.sort.each_with_object({}) do |id, pages|
+          page = scan.pages[id]
+          pages[id] = page_state(page, "checkpoint", nil)
+        end,
+        "unresolved_receipts" => []
+      }
+    end
+
+    def page_state(page, source, receipt_id)
+      value = {"title" => page.title, "content_hash" => page.content_hash, "text" => page.text, "source" => source}
+      value["receipt_id"] = receipt_id if receipt_id
+      value
+    end
+
+    def ensure_state_vault(state)
+      raise Failure.new("state-project-mismatch", "state.json 不属于当前项目") unless state["project_id"] == @project.id
+    end
+
+    def compare(scan, state, targets)
+      baseline = state.fetch("pages", {})
+      current = scan.pages
+      changes = []
+      deleted = baseline.keys - current.keys
+      added = current.keys - baseline.keys
+      renamed_old = Set.new
+      renamed_new = Set.new
+      deleted.each do |old_id|
+        matches = added.select { |new_id| current[new_id].title == baseline[old_id]["title"] }
+        next unless matches.length == 1
+        new_id = matches.first
+        changes << change_item("renamed", baseline[old_id], current[new_id], old_id, new_id)
+        renamed_old << old_id
+        renamed_new << new_id
+      end
+      (deleted - renamed_old.to_a).sort.each { |id| changes << change_item("deleted", baseline[id], nil, id, nil) }
+      (added - renamed_new.to_a).sort.each { |id| changes << change_item("added", nil, current[id], nil, id) }
+      (baseline.keys & current.keys).sort.each do |id|
+        next if baseline[id]["content_hash"] == current[id].content_hash
+        changes << change_item("modified", baseline[id], current[id], id, id)
+      end
+      resolved = targets.empty? ? nil : resolve_targets(scan, state, targets)
+      changes.select! { |change| resolved.include?(change["source_id"]) || resolved.include?(change["old_source_id"]) } if resolved
+      {"changes" => changes, "targets" => changes.map { |change| change["title"] }.compact.uniq, "issues" => []}
+    end
+
+    def change_item(kind, before, after, old_id, new_id)
+      old_text = before && before["text"]
+      new_text = after && after.text
+      excerpt, anchor = diff_excerpt(old_text, new_text)
+      hash = after ? after.content_hash : before["content_hash"]
+      item = {
+        "change_type" => kind,
+        "data_class" => "untrusted-worldbook-content",
+        "source_id" => new_id || old_id,
+        "title" => after ? after.title : before["title"],
+        "content_hash" => hash,
+        "anchor" => anchor,
+        "text" => excerpt
+      }
+      item["old_source_id"] = old_id if old_id && old_id != new_id
+      item["old_content_hash"] = before["content_hash"] if before
+      item
+    end
+
+    def diff_excerpt(old_text, new_text)
+      return [new_text, Util.anchor(new_text)] unless old_text
+      return [old_text, Util.anchor(old_text)] unless new_text
+      old_lines = old_text.lines
+      new_lines = new_text.lines
+      prefix = 0
+      prefix += 1 while prefix < old_lines.length && prefix < new_lines.length && old_lines[prefix] == new_lines[prefix]
+      suffix = 0
+      suffix += 1 while suffix < old_lines.length - prefix && suffix < new_lines.length - prefix && old_lines[-1 - suffix] == new_lines[-1 - suffix]
+      old_end = old_lines.length - suffix
+      new_end = new_lines.length - suffix
+      before = old_lines[prefix...old_end].to_a.join
+      after = new_lines[prefix...new_end].to_a.join
+      ["--- before\n#{before}+++ after\n#{after}", Util.anchor(new_text, [prefix, new_lines.length - 1].min)]
+    end
+
+    def resolve_targets(scan, state, targets)
+      targets.map do |target|
+        value = target.to_s.strip
+        path = Pathname.new(value)
+        if value.empty? || path.absolute? || path.each_filename.include?("..") || value.match?(/[\x00*?\[\]{}]/) || value.start_with?("_raw/")
+          raise Failure.new("target-invalid", "非法 target：#{target.inspect}")
+        end
+        if value.include?("/")
+          candidate = value.sub(%r{\A\./}, "")
+          candidate += ".md" unless candidate.end_with?(".md")
+          matches = [candidate].select { |id| scan.pages.key?(id) || state.fetch("pages", {}).key?(id) }
+        else
+          matches = Array(scan.by_name[Util.key(value)]).map(&:source_id).uniq
+          if matches.empty?
+            matches = state.fetch("pages", {}).select { |_id, page| Util.key(page["title"]) == Util.key(value) }.keys
+          end
+        end
+        raise Failure.new("target-not-found", "找不到 target：#{target}") if matches.empty?
+        raise Failure.new("target-ambiguous", "target 不能唯一定位：#{target}") unless matches.length == 1
+        matches.first
+      end.uniq
+    end
+
+    def build_packet(scan, state, comparison, budget)
+      dependency_name = @project.dependency_file && File.basename(@project.dependency_file)
+      config = dependency_name ? parse_policy(scan, dependency_name) : {}
+      edges = config.fetch("edges", {})
+      seed_titles = comparison["changes"].map { |change| change["title"] }.compact
+      impacts = impact_titles(edges, seed_titles)
+      required_titles = impacts.map(&:first)
+      required = required_titles.map do |title, depth|
+        pages = scan.by_title[Util.key(title)]
+        next unless pages.length == 1
+        context_item(pages.first, depth, "dependency")
+      end.compact
+      core_titles = Array(config["core_settings"]).select do |core|
+        seed_titles.include?(core) || !(impact_titles(edges, [core]).map(&:first) & seed_titles).empty?
+      end
+      core_titles.each do |title|
+        next if seed_titles.include?(title) || required_titles.include?(title)
+        pages = scan.by_title[Util.key(title)]
+        required << context_item(pages.first, nil, "core-contract") if pages.length == 1
+      end
+      required_ids = required.map { |item| item["source_id"] }.to_set
+      seed_links = comparison["changes"].flat_map do |change|
+        page = scan.pages[change["source_id"]]
+        page ? page.links : []
+      end.uniq
+      advisory = scan.pages.values.each_with_object([]) do |page, items|
+        next if required_ids.include?(page.source_id) || seed_titles.include?(page.title)
+        reason = if !(page.links & seed_titles).empty?
+                   "backlink"
+                 elsif !(page.links & seed_links).empty?
+                   "shared-reference"
+                 end
+        items << context_item(page, nil, reason) if reason
+      end
+      policy_items = policy_items(scan, seed_titles + required_titles + core_titles)
+      blockers = Array(state["unresolved_receipts"]).select { |item| !(Array(item["targets"]) & seed_titles).empty? }
+      response_schema = receipt_schema
+      packet = {
+        "packet_version" => PACKET_VERSION,
+        "packet_hash" => "sha256:#{'0' * 64}",
+        "project_id" => @project.id,
+        "baseline_manifest_hash" => baseline_manifest_hash(state),
+        "head_manifest_hash" => scan.manifest_hash,
+        "policy_hash" => scan.policy_hash,
+        "targets" => seed_titles,
+        "changes" => comparison["changes"].dup,
+        "required_context" => required,
+        "advisory_context" => advisory,
+        "policies" => policy_items,
+        "prior_blockers" => blockers,
+        "omissions" => [],
+        "reviewability" => "ready",
+        "response_schema" => response_schema
+      }
+      trim_packet(packet, budget)
+      packet["packet_hash"] = Util.hash(packet.reject { |key, _value| key == "packet_hash" })
+      packet
+    end
+
+    def impact_titles(edges, seeds)
+      result = []
+      visited = seeds.to_set
+      queue = seeds.flat_map { |title| Array(edges[title]).map { |target| [target, 1] } }
+      until queue.empty?
+        title, depth = queue.shift
+        next if visited.include?(title)
+        visited << title
+        result << [title, depth]
+        Array(edges[title]).each { |target| queue << [target, depth + 1] }
+      end
+      result
+    end
+
+    def context_item(page, depth, reason)
+      item = {"source_id" => page.source_id, "title" => page.title, "content_hash" => page.content_hash, "anchor" => "文首", "authority" => page.frontmatter["canon_status"], "data_class" => "untrusted-worldbook-content", "reason" => reason, "text" => page.text}
+      item["depth"] = depth if depth
+      item
+    end
+
+    def policy_items(scan, titles)
+      design = parse_policy(scan, "design-principles.json")
+      principles = Array(design["principles"])
+      ids = Array(design["required_for_all"]).dup
+      titles.each do |title|
+        page = Array(scan.by_title[Util.key(title)]).first
+        next unless page
+        tags = Array(page.frontmatter["tags"])
+        Array(design["scopes"]).each do |scope|
+          tag_match = !(Array(scope["tags_any"]) & tags).empty?
+          title_match = scope["title_pattern"] && Regexp.new(scope["title_pattern"]).match?(title)
+          ids.concat(Array(scope["principles"])) if tag_match || title_match
+        rescue RegexpError
+          next
+        end
+      end
+      ids.uniq!
+      items = principles.select { |principle| ids.include?(principle["id"]) }.map { |principle| policy_item("design-principles.json", principle["id"], principle) }
+      canon = parse_policy(scan, "canon-rules.json")
+      relevant_pages = titles.flat_map { |title| Array(scan.by_title[Util.key(title)]) }
+      Array(canon["rules"]).select do |rule|
+        next false if (Array(rule["principles"]) & ids).empty?
+        allowed = Array(rule["allow_paths"])
+        allowed.any? { |path| relevant_pages.any? { |page| page.source_id == path } } ||
+          relevant_pages.any? do |page|
+            begin
+              Regexp.new(rule.fetch("pattern")).match?(page.text)
+            rescue RegexpError, KeyError
+              false
+            end
+          end
+      end.each do |rule|
+        items << policy_item("canon-rules.json", rule["code"], rule)
+      end
+      physics = parse_policy(scan, "physics.json")
+      Array(physics["claims"]).select do |claim|
+        page = scan.pages[claim["page"]]
+        page && titles.include?(page.title)
+      end.each { |claim| items << policy_item("physics.json", claim["key"], claim) }
+      dependency_name = @project.dependency_file && File.basename(@project.dependency_file)
+      dependencies = dependency_name ? parse_policy(scan, dependency_name) : {}
+      relevant_edges = dependencies.fetch("edges", {}).select { |source, _targets| titles.include?(source) }
+      items << policy_item(dependency_name, "relevant-edges", {"edge_semantics" => dependencies["edge_semantics"], "edges" => relevant_edges}) unless relevant_edges.empty?
+      items
+    end
+
+    def baseline_manifest_hash(state)
+      pages = state.fetch("pages", {})
+      Util.hash(pages.keys.sort.map { |id| [id, pages[id]["content_hash"], pages[id]["title"]] })
+    end
+
+    def policy_item(file, anchor, content)
+      text = Util.json(content)
+      {"source_id" => "policy/#{file}", "title" => file, "content_hash" => Util.hash(text), "anchor" => anchor, "data_class" => "review-policy-data", "text" => text}
+    end
+
+    def parse_policy(scan, name)
+      entry = scan.policies[name]
+      return {} unless entry
+      JSON.parse(entry.fetch("text"))
+    rescue JSON::ParserError => e
+      raise Failure.new("policy-invalid", "#{name} 无法解析：#{e.message}")
+    end
+
+    def trim_packet(packet, budget)
+      removals = [
+        ["advisory_context", "advisory"],
+        ["required_context", "required"],
+        ["policies", "required"],
+        ["changes", "required"]
+      ]
+      removals.each do |field, level|
+        while Util.json(packet).length > budget && !packet[field].empty?
+          removed = packet[field].pop
+          packet["omissions"] << {"kind" => level, "source_id" => removed["source_id"], "reason" => "budget"}
+        end
+      end
+      if packet["omissions"].any? { |omission| omission["kind"] == "required" }
+        packet["reviewability"] = "insufficient-evidence"
+      end
+      while Util.json(packet).length > budget && packet["omissions"].length > 1
+        counts = packet["omissions"].group_by { |item| item["kind"] }.transform_values(&:length)
+        packet["omissions"] = counts.map { |kind, count| {"kind" => kind, "count" => count, "reason" => "budget"} }
+      end
+      raise Failure.new("budget-too-small", "预算不足以容纳 ReviewPacket 基础结构") if Util.json(packet).length > budget
+    end
+
+    def receipt_schema
+      {
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => %w[receipt_version packet_hash reviewer verdict findings omissions created_at],
+        "properties" => {
+          "receipt_version" => {"const" => RECEIPT_VERSION},
+          "packet_hash" => {"type" => "string", "pattern" => "^sha256:[0-9a-f]{64}$"},
+          "reviewer" => {"type" => "object", "additionalProperties" => false, "required" => ["kind"], "properties" => {"kind" => {"enum" => %w[human llm]}, "provider" => {"type" => "string"}, "model" => {"type" => "string"}, "identity" => {"type" => "string"}}},
+          "verdict" => {"enum" => VERDICTS},
+          "findings" => {"type" => "array", "items" => {"type" => "object", "additionalProperties" => false, "required" => %w[id severity claim evidence rationale suggested_action], "properties" => {"id" => {"type" => "string", "minLength" => 1}, "severity" => {"enum" => %w[info warning error blocker]}, "claim" => {"type" => "string", "minLength" => 1}, "evidence" => {"type" => "array", "minItems" => 1, "items" => {"type" => "object", "additionalProperties" => false, "required" => %w[source_id content_hash anchor], "properties" => {"source_id" => {"type" => "string"}, "content_hash" => {"type" => "string", "pattern" => "^sha256:[0-9a-f]{64}$"}, "anchor" => {"type" => "string"}}}}, "rationale" => {"type" => "string", "minLength" => 1}, "suggested_action" => {"type" => "string", "minLength" => 1}}}},
+          "omissions" => {"type" => "array"},
+          "created_at" => {"type" => "string", "format" => "date-time"}
+        }
+      }
+    end
+
+    def validate_receipt_shape(receipt)
+      raise Failure.new("receipt-schema-invalid", "Receipt 必须是 JSON object") unless receipt.is_a?(Hash)
+      required = %w[receipt_version packet_hash reviewer verdict findings omissions created_at]
+      allowed = required
+      missing = required - receipt.keys
+      extra = receipt.keys - allowed
+      raise Failure.new("receipt-schema-invalid", "Receipt 缺少字段：#{missing.join(', ')}") unless missing.empty?
+      raise Failure.new("receipt-schema-invalid", "Receipt 含未知字段：#{extra.join(', ')}") unless extra.empty?
+      raise Failure.new("receipt-schema-invalid", "receipt_version 无效") unless receipt["receipt_version"] == RECEIPT_VERSION
+      raise Failure.new("receipt-schema-invalid", "packet_hash 无效") unless receipt["packet_hash"].to_s.match?(/\Asha256:[0-9a-f]{64}\z/)
+      reviewer = receipt["reviewer"]
+      raise Failure.new("receipt-schema-invalid", "reviewer 无效") unless reviewer.is_a?(Hash) && %w[human llm].include?(reviewer["kind"]) && (reviewer.keys - %w[kind provider model identity]).empty?
+      %w[provider model identity].each do |key|
+        raise Failure.new("receipt-schema-invalid", "reviewer #{key} 必须是字符串") if reviewer.key?(key) && !reviewer[key].is_a?(String)
+      end
+      raise Failure.new("receipt-schema-invalid", "verdict 无效") unless VERDICTS.include?(receipt["verdict"])
+      raise Failure.new("receipt-schema-invalid", "findings/omissions 必须是数组") unless receipt["findings"].is_a?(Array) && receipt["omissions"].is_a?(Array)
+      receipt["omissions"].each do |omission|
+        allowed = %w[kind source_id count reason]
+        valid_count = omission.is_a?(Hash) && omission["count"].is_a?(Integer) && omission["count"] > 0
+        valid_locator = omission.is_a?(Hash) && (omission["source_id"].is_a?(String) ^ valid_count)
+        unless valid_locator && %w[required advisory].include?(omission["kind"]) && omission["reason"].is_a?(String) && (omission.keys - allowed).empty?
+          raise Failure.new("receipt-schema-invalid", "omission 字段无效")
+        end
+      end
+      raise Failure.new("receipt-schema-invalid", "created_at 必须是 ISO 8601 时间") unless receipt["created_at"].is_a?(String)
+      Time.iso8601(receipt["created_at"])
+      ids = Set.new
+      receipt["findings"].each do |finding|
+        fields = %w[id severity claim evidence rationale suggested_action]
+        raise Failure.new("receipt-schema-invalid", "finding 字段无效") unless finding.is_a?(Hash) && (fields - finding.keys).empty? && (finding.keys - fields).empty?
+        raise Failure.new("receipt-schema-invalid", "finding id 必须稳定且唯一") unless finding["id"].is_a?(String) && !finding["id"].empty? && !ids.include?(finding["id"])
+        ids << finding["id"]
+        raise Failure.new("receipt-schema-invalid", "finding severity 无效") unless %w[info warning error blocker].include?(finding["severity"])
+        raise Failure.new("receipt-schema-invalid", "finding evidence 必须是非空数组") unless finding["evidence"].is_a?(Array) && !finding["evidence"].empty?
+        %w[claim rationale suggested_action].each do |key|
+          raise Failure.new("receipt-schema-invalid", "finding #{key} 不能为空") unless finding[key].is_a?(String) && !finding[key].strip.empty?
+        end
+      end
+      if BLOCKING_VERDICTS.include?(receipt["verdict"]) && receipt["findings"].empty?
+        raise Failure.new("receipt-schema-invalid", "阻断 verdict 至少需要一个 finding")
+      end
+      receipt
+    rescue ArgumentError
+      raise Failure.new("receipt-schema-invalid", "created_at 必须是 ISO 8601 时间")
+    end
+
+    def validate_receipt_evidence(receipt, packet)
+      sources = %w[changes required_context advisory_context policies].flat_map { |field| Array(packet[field]) }.map do |item|
+        [item["source_id"], item["content_hash"], item["anchor"]]
+      end.to_set
+      receipt["findings"].each do |finding|
+        finding["evidence"].each do |reference|
+          unless reference.is_a?(Hash) && reference.keys.sort == %w[anchor content_hash source_id] && sources.include?([reference["source_id"], reference["content_hash"], reference["anchor"]])
+            raise Failure.new("receipt-evidence-invalid", "finding #{finding['id']} 引用了 packet 外证据")
+          end
+        end
+      end
+    end
+
+    def advance_state(state, scan, packet, receipt)
+      affected_titles = Array(packet["targets"])
+      Array(packet["changes"]).each do |change|
+        state["pages"].delete(change["old_source_id"]) if change["old_source_id"]
+        id = change["source_id"]
+        page = scan.pages[id]
+        state["pages"][id] = page_state(page, "receipt", receipt["receipt_id"]) if page && affected_titles.include?(page.title)
+        state["pages"].delete(id) if !page && affected_titles.include?(change["title"])
+      end
+      state["updated_at"] = Time.now.utc.iso8601
+      state["unresolved_receipts"] = Array(state["unresolved_receipts"]).reject { |item| !(Array(item["targets"]) & affected_titles).empty? }
+      if BLOCKING_VERDICTS.include?(receipt["verdict"])
+        state["unresolved_receipts"] << {"receipt_id" => receipt["receipt_id"], "verdict" => receipt["verdict"], "targets" => affected_titles, "findings" => receipt["findings"]}
+      end
+    end
+
+    def stale_receipts(scan, state)
+      state.fetch("pages", {}).each_with_object([]) do |(id, baseline), stale|
+        next unless baseline["source"] == "receipt"
+        current = scan.pages[id]
+        policy_stale = state["policy_hash"] != scan.policy_hash
+        next if !policy_stale && current && current.content_hash == baseline["content_hash"]
+        stale << {"source_id" => id, "title" => baseline["title"], "receipt_id" => baseline["receipt_id"], "reason" => policy_stale ? "policy-changed" : "page-changed"}
+      end
+    end
+
+    def issue(code, message)
+      {"code" => code, "message" => message}
+    end
+
+    def blocked(command, issues, code)
+      result(command, code, {"issues" => issues})
+    end
+
+    def result(command, code, payload)
+      [code, {"ok" => code.zero?, "command" => command}.merge(payload)]
+    end
+  end
+
+  class CLI
+    def self.run(argv, input: $stdin, output: $stdout, error: $stderr, app: nil)
+      command = argv.shift
+      raise Failure.new("cli-invalid", "用法：worldcheck check|review|status ...") unless %w[check review status].include?(command)
+      options = {json: false, full: false, budget: 50_000, budget_set: false, record: nil, config: nil}
+      parser = OptionParser.new do |opts|
+        opts.on("--json") { options[:json] = true }
+        opts.on("--full") { options[:full] = true }
+        opts.on("--budget-chars N", Integer) { |value| options[:budget] = value; options[:budget_set] = true }
+        opts.on("--record FILE") { |value| options[:record] = value }
+        opts.on("--config PATH") { |value| options[:config] = value }
+      end
+      parser.parse!(argv)
+      app ||= begin
+        raise Failure.new("config-required", "必须通过 --config 指定 Worldcheck 配置") unless options[:config]
+        App.new(Project.load(options[:config]))
+      end
+      code, payload = case command
+                      when "check"
+                        reject_option(options[:record], "--record 只用于 review")
+                        reject_option(options[:budget_set], "--budget-chars 只用于 review")
+                        app.check(argv, full: options[:full])
+                      when "review"
+                        reject_option(options[:full], "--full 只用于 check")
+                        if options[:record]
+                          raise Failure.new("cli-invalid", "review --record 不接受 TARGET") unless argv.empty?
+                          text = options[:record] == "-" ? input.read : File.read(options[:record], encoding: "UTF-8")
+                          app.record(JSON.parse(text))
+                        else
+                          app.review(argv, budget_chars: options[:budget])
+                        end
+                      when "status"
+                        reject_option(options[:full] || options[:record] || options[:budget_set], "status 不接受 --full/--record/--budget-chars")
+                        raise Failure.new("cli-invalid", "status 最多接受一个 TARGET") if argv.length > 1
+                        app.status(argv.first)
+                      end
+      if options[:json]
+        output.puts(Util.json(payload))
+      else
+        print_text(payload, output)
+      end
+      code
+    rescue OptionParser::ParseError, JSON::ParserError, Errno::ENOENT => e
+      failure = Failure.new("cli-invalid", e.message)
+      print_failure(failure, output, error, options && options[:json])
+      2
+    rescue Failure => e
+      print_failure(e, output, error, options && options[:json])
+      2
+    end
+
+    def self.reject_option(value, message)
+      raise Failure.new("cli-invalid", message) if value
+    end
+
+    def self.print_text(payload, output)
+      Array(payload["issues"]).each { |item| output.puts("[#{payload['ok'] ? 'INFO' : 'BLOCK'}] #{item['code']} — #{item['message']}") }
+      if payload["packet"]
+        packet = payload["packet"]
+        output.puts("[PACKET] #{packet['packet_hash']} targets=#{packet['targets'].length} required=#{packet['required_context'].length} advisory=#{packet['advisory_context'].length} reviewability=#{packet['reviewability']}")
+      end
+      output.puts("[SUMMARY] command=#{payload['command']} ok=#{payload['ok']}")
+    end
+
+    def self.print_failure(failure, output, error, json)
+      if json
+        output.puts(Util.json({"ok" => false, "command" => "error", "issues" => [{"code" => failure.code, "message" => failure.message}]}))
+      else
+        error.puts("[ERROR] #{failure.code} — #{failure.message}")
+      end
+    end
+  end
+end
+
+exit Worldcheck::CLI.run(ARGV) if $PROGRAM_NAME == __FILE__

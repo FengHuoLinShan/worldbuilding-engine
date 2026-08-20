@@ -1,0 +1,4 @@
+interface:
+  display_name: "小说技法蒸馏"
+  short_description: "从合法文本和功能对照中提炼可迁移的小说写作技法"
+  default_prompt: "使用 $distill-novel-craft 分析这段小说在结构、信息、人物、场景和语言上的技法，并用名著作功能对照。"

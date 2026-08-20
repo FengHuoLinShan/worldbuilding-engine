@@ -1,0 +1,355 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.codex/worldbuilding-engine/world-state.schema.json",
+  "title": "Worldbuilding Engine State",
+  "description": "Machine-readable state for an auditable, evolvable worldbuilding project.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "engine_version",
+    "project",
+    "authority",
+    "premise",
+    "knowledge_layers",
+    "rules",
+    "reproduction_loops",
+    "facets",
+    "coupling_chains",
+    "situated_tests",
+    "pressure_tests",
+    "actors",
+    "places",
+    "institutions",
+    "history",
+    "fiction_core",
+    "dependencies",
+    "change_log",
+    "audit",
+    "extensions"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "engine_version": { "type": "string", "minLength": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "language", "seed", "mode", "status", "created_at", "updated_at"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
+        "language": { "type": "string", "minLength": 2 },
+        "seed": { "type": "string" },
+        "mode": { "enum": ["create", "expand", "audit", "repair", "promote", "export"] },
+        "status": { "enum": ["developing", "review", "stable", "archived"] },
+        "created_at": { "$ref": "#/$defs/dateOrNull" },
+        "updated_at": { "$ref": "#/$defs/dateOrNull" }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_of_truth", "read_only", "constraints", "locked_decisions", "author_required", "open_questions"],
+      "properties": {
+        "source_of_truth": { "$ref": "#/$defs/stringArray" },
+        "read_only": { "$ref": "#/$defs/stringArray" },
+        "constraints": { "$ref": "#/$defs/stringArray" },
+        "locked_decisions": { "$ref": "#/$defs/decisionArray" },
+        "author_required": { "$ref": "#/$defs/decisionArray" },
+        "open_questions": { "$ref": "#/$defs/decisionArray" }
+      }
+    },
+    "premise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "core_difference", "human_experience", "scale", "aesthetic_surface", "themes", "evidence"],
+      "properties": {
+        "status": { "$ref": "#/$defs/authorityStatus" },
+        "core_difference": { "type": "string" },
+        "human_experience": { "type": "string" },
+        "scale": { "type": "string" },
+        "aesthetic_surface": { "$ref": "#/$defs/stringArray" },
+        "themes": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "knowledge_layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["author_truth", "expert_models", "public_beliefs", "reader_unknowns"],
+      "properties": {
+        "author_truth": { "$ref": "#/$defs/knowledgeArray" },
+        "expert_models": { "$ref": "#/$defs/knowledgeArray" },
+        "public_beliefs": { "$ref": "#/$defs/knowledgeArray" },
+        "reader_unknowns": { "$ref": "#/$defs/knowledgeArray" }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rule" }
+    },
+    "reproduction_loops": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["material", "population_care", "economic", "institutional", "knowledge", "meaning_identity"],
+      "properties": {
+        "material": { "$ref": "#/$defs/coverageEntry" },
+        "population_care": { "$ref": "#/$defs/coverageEntry" },
+        "economic": { "$ref": "#/$defs/coverageEntry" },
+        "institutional": { "$ref": "#/$defs/coverageEntry" },
+        "knowledge": { "$ref": "#/$defs/coverageEntry" },
+        "meaning_identity": { "$ref": "#/$defs/coverageEntry" }
+      }
+    },
+    "facets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/facet" }
+    },
+    "coupling_chains": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/couplingChain" }
+    },
+    "situated_tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinary_tuesday", "seven_day_failure", "life_course", "ten_year_feedback"],
+      "properties": {
+        "ordinary_tuesday": { "$ref": "#/$defs/situatedTest" },
+        "seven_day_failure": { "$ref": "#/$defs/situatedTest" },
+        "life_course": { "$ref": "#/$defs/situatedTest" },
+        "ten_year_feedback": { "$ref": "#/$defs/situatedTest" }
+      }
+    },
+    "pressure_tests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pressureTest" }
+    },
+    "actors": { "$ref": "#/$defs/entityArray" },
+    "places": { "$ref": "#/$defs/entityArray" },
+    "institutions": { "$ref": "#/$defs/entityArray" },
+    "history": { "$ref": "#/$defs/entityArray" },
+    "fiction_core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["world", "character", "story", "outline", "prose", "editor"],
+      "properties": {
+        "world": { "$ref": "#/$defs/pipelineEntry" },
+        "character": { "$ref": "#/$defs/pipelineEntry" },
+        "story": { "$ref": "#/$defs/pipelineEntry" },
+        "outline": { "$ref": "#/$defs/pipelineEntry" },
+        "prose": { "$ref": "#/$defs/pipelineEntry" },
+        "editor": { "$ref": "#/$defs/pipelineEntry" }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "kind", "status"],
+        "properties": {
+          "from": { "$ref": "#/$defs/id" },
+          "to": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["requires", "informs", "derives", "contradicts"] },
+          "status": { "enum": ["active", "proposed", "deprecated"] }
+        }
+      }
+    },
+    "change_log": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "at", "summary", "source", "authority", "changed_ids", "invalidated_layers"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "at": { "$ref": "#/$defs/dateOrNull" },
+          "summary": { "type": "string" },
+          "source": { "type": "string" },
+          "authority": { "$ref": "#/$defs/authorityStatus" },
+          "changed_ids": { "$ref": "#/$defs/stringArray" },
+          "invalidated_layers": { "$ref": "#/$defs/stringArray" }
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["last_run_at", "engine_version", "valid", "blocking_gaps", "warnings"],
+      "properties": {
+        "last_run_at": { "$ref": "#/$defs/dateOrNull" },
+        "engine_version": { "type": "string" },
+        "valid": { "type": ["boolean", "null"] },
+        "blocking_gaps": { "$ref": "#/$defs/stringArray" },
+        "warnings": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "extensions": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "dateOrNull": { "type": ["string", "null"], "format": "date-time" },
+    "stringArray": { "type": "array", "items": { "type": "string" } },
+    "authorityStatus": { "enum": ["draft", "proposed", "canon", "author-required", "deprecated"] },
+    "coverageStatus": { "enum": ["gap", "partial", "covered", "not-applicable"] },
+    "decisionArray": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "question", "status", "evidence"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "question": { "type": "string" },
+          "status": { "$ref": "#/$defs/authorityStatus" },
+          "evidence": { "$ref": "#/$defs/stringArray" }
+        }
+      }
+    },
+    "knowledgeArray": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "claim", "status", "known_by", "evidence"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "claim": { "type": "string" },
+          "status": { "$ref": "#/$defs/authorityStatus" },
+          "known_by": { "$ref": "#/$defs/stringArray" },
+          "evidence": { "$ref": "#/$defs/stringArray" }
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "name", "status", "capability", "impossibility", "inputs", "outputs", "costs", "losses",
+        "access", "visibility", "scale_limits", "failure_modes", "maintenance", "countermeasures",
+        "knowledge_layer", "dependencies", "evidence"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/authorityStatus" },
+        "capability": { "type": "string" },
+        "impossibility": { "type": "string" },
+        "inputs": { "$ref": "#/$defs/stringArray" },
+        "outputs": { "$ref": "#/$defs/stringArray" },
+        "costs": { "$ref": "#/$defs/stringArray" },
+        "losses": { "$ref": "#/$defs/stringArray" },
+        "access": { "$ref": "#/$defs/stringArray" },
+        "visibility": { "$ref": "#/$defs/stringArray" },
+        "scale_limits": { "$ref": "#/$defs/stringArray" },
+        "failure_modes": { "$ref": "#/$defs/stringArray" },
+        "maintenance": { "$ref": "#/$defs/stringArray" },
+        "countermeasures": { "$ref": "#/$defs/stringArray" },
+        "knowledge_layer": { "enum": ["author_truth", "expert_model", "public_belief", "mixed", "unknown"] },
+        "dependencies": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "coverageEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "chain", "evidence", "gaps", "reason"],
+      "properties": {
+        "status": { "$ref": "#/$defs/coverageStatus" },
+        "chain": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" },
+        "gaps": { "$ref": "#/$defs/stringArray" },
+        "reason": { "type": "string" }
+      }
+    },
+    "facet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "maturity", "evidence", "gaps", "dependencies", "reason"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/coverageStatus" },
+        "maturity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["framework", "instance"],
+          "properties": {
+            "framework": { "type": "integer", "minimum": 0, "maximum": 6 },
+            "instance": { "type": "integer", "minimum": 0, "maximum": 6 }
+          }
+        },
+        "evidence": { "$ref": "#/$defs/stringArray" },
+        "gaps": { "$ref": "#/$defs/stringArray" },
+        "dependencies": { "$ref": "#/$defs/stringArray" },
+        "reason": { "type": "string" }
+      }
+    },
+    "couplingChain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "nodes", "breaks", "evidence", "reason"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/coverageStatus" },
+        "nodes": { "$ref": "#/$defs/stringArray" },
+        "breaks": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" },
+        "reason": { "type": "string" }
+      }
+    },
+    "situatedTest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "scenario", "actors", "evidence", "contradictions", "reason"],
+      "properties": {
+        "status": { "$ref": "#/$defs/coverageStatus" },
+        "scenario": { "type": "string" },
+        "actors": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" },
+        "contradictions": { "$ref": "#/$defs/stringArray" },
+        "reason": { "type": "string" }
+      }
+    },
+    "pressureTest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "status", "result", "evidence", "failures"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string" },
+        "status": { "enum": ["not-run", "pass", "mixed", "fail"] },
+        "result": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/stringArray" },
+        "failures": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "entityArray": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "status", "summary", "evidence"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "type": "string" },
+          "status": { "$ref": "#/$defs/authorityStatus" },
+          "summary": { "type": "string" },
+          "evidence": { "$ref": "#/$defs/stringArray" }
+        }
+      }
+    },
+    "pipelineEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "artifacts", "invalidated_by", "notes"],
+      "properties": {
+        "status": { "enum": ["not-started", "ready", "in-progress", "valid", "needs-review", "invalidated", "blocked"] },
+        "artifacts": { "$ref": "#/$defs/stringArray" },
+        "invalidated_by": { "$ref": "#/$defs/stringArray" },
+        "notes": { "$ref": "#/$defs/stringArray" }
+      }
+    }
+  }
+}

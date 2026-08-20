@@ -1,0 +1,6 @@
+interface:
+  display_name: "世界观候选审查官"
+  short_description: "重建并质疑对话中尚未采用的世界观候选，推动修订、取舍与收敛"
+  default_prompt: "Use $worldbuilding-candidate-audit to reconstruct, challenge, and improve the unadopted worldbuilding candidates in this conversation."
+policy:
+  allow_implicit_invocation: true

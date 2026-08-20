@@ -1,0 +1,29 @@
+{
+  "name": "worldbuilding-engine",
+  "version": "0.7.0+codex.20260820150946",
+  "description": "Turn creative seeds or accumulated drafts into an auditable world model, then bridge verified writing craft into the owning fiction artifact.",
+  "author": {
+    "name": "FengHuoLinShan",
+    "url": "https://github.com/FengHuoLinShan/worldbuilding-engine"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "\u4e16\u754c\u89c2\u521b\u8bbe\u5f15\u64ce",
+    "shortDescription": "\u4ece\u7075\u611f\u6216\u591a\u8f6e\u5019\u9009\u751f\u6210\u53ef\u5ba1\u8ba1\u3001\u80fd\u6536\u655b\u7684\u4e16\u754c\u89c2\u5de5\u7a0b",
+    "longDescription": "\u628a\u7b80\u5355\u521b\u610f\u6216\u591a\u8f6e\u5019\u9009\u6574\u7406\u4e3a\u5e26\u6743\u5a01\u72b6\u6001\u3001\u56e0\u679c\u8d26\u672c\u3001\u793e\u4f1a\u518d\u751f\u4ea7\u3001\u7eb5\u5411\u5b9e\u4f8b\u3001\u9a8c\u8bc1\u8282\u5f8b\u548c\u53d8\u66f4\u5931\u6548\u5173\u7cfb\u7684\u4e16\u754c\u6a21\u578b\uff1b\u9632\u6b62\u5019\u9009\u5c71\uff0c\u5e76\u5c06\u6709\u8bc1\u636e\u7684\u5199\u4f5c\u6280\u6cd5\u4ea4\u7ed9 fiction-core \u7684\u5b9e\u9645\u5de5\u4ef6\u6240\u6709\u8005\u3002",
+    "developerName": "FengHuoLinShan",
+    "category": "Writing",
+    "capabilities": [
+      "Worldbuilding design",
+      "Realism audit",
+      "Canon governance",
+      "Convergent iteration",
+      "Evidence-backed writing craft",
+      "Deterministic prose surface audit",
+      "Semantic review completeness gate",
+      "Fiction-core routing"
+    ],
+    "defaultPrompt": "\u4f7f\u7528 $worldbuilding-engine \u5c06\u6211\u7684\u521b\u610f\u6216\u65e2\u6709\u5019\u9009\u6301\u7eed\u5b8c\u5584\u4e3a\u53ef\u5ba1\u8ba1\u4e16\u754c\u89c2\uff1b\u9700\u8981\u8fc1\u79fb\u8303\u4f8b\u5199\u6cd5\u65f6\u8054\u7528 $distill-novel-craft\uff0c\u5e76\u628a\u6280\u6cd5\u4ea4\u7ed9\u5b9e\u9645\u5de5\u4ef6\u6240\u6709\u8005\u3002"
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "世界观创设引擎"
+  short_description: "从灵感或多轮候选生成可审计、可收敛、可持续迭代的世界观工程"
+  default_prompt: "使用 $worldbuilding-engine 将我的创意或既有候选收敛为可审计世界观；需要迁移范例写法时联用 $distill-novel-craft，并把技法交给实际工件所有者。"
