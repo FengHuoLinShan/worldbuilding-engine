@@ -1,0 +1,81 @@
+{
+  "skill_name": "world-concept-designer",
+  "evals": [
+    {
+      "id": 1,
+      "name": "模糊城市请求先建立设计问题",
+      "prompt": "画一座很震撼的河港奇幻城市。",
+      "expected_output": "先建立用途、Design Question、正典边界和参考研究，再给结构方向；不能直接把形容词扩写成最终生图 Prompt。",
+      "assertions": [
+        "识别下游用途、交付档位或明确记录默认值",
+        "提出一个关于河港形成或运作的主要 Design Question",
+        "区分已知、推导、未知和禁止项",
+        "在最终 Prompt 或生图前完成 Reference Gate 与 Direction Gate",
+        "没有用更宏伟、更电影感或更多细节代替设计判断"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "候选地图不自动补全正典",
+      "prompt": "这份候选设定只确定一条河流入半封闭海湾，北岸较高，其他坐标、邻国和地名都未定。请做城市地图概念。",
+      "expected_output": "保留候选状态，只设计可回指现有条件的空间方向；不得创造正典坐标、邻国或额外地名，并把画面新增内容送入候选反馈。",
+      "assertions": [
+        "明确底层资料仍是候选而非正典",
+        "未发明邻国、正式坐标或额外专名",
+        "地图 Prompt 包含投影、方向、尺度锚点和 Avoid",
+        "AI 地图没有被标为 spatially-verified",
+        "新增结构进入 visual-placeholder 或 candidate-canon"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "讨论提示词时停止生图",
+      "prompt": "先讨论这张城市 Keyframe 的生图提示词，不要生成图片。",
+      "expected_output": "完成 Brief、参考、镜头、视觉证据和 Prompt 草案后停止，明确没有调用图像工具。",
+      "assertions": [
+        "没有调用图像生成或编辑",
+        "说明 Keyframe 的叙事功能和主要 Design Question",
+        "Prompt 建立在已选方向和视觉证据上",
+        "列出仍需用户确认或验证的关键项"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "没有 blockout 不冒充生产交接",
+      "prompt": "只有一张 AI 生成的透视城市图，没有尺寸、平面或 3D 文件。请整理成可以直接交给 3D 团队的 production-handoff。",
+      "expected_output": "审查并指出缺失的空间证据，最多保留 direction-locked；输出 Blockout Brief 和缺失视图，不宣称已可生产。",
+      "assertions": [
+        "没有把 AI 透视图称为正交图或真实空间验证",
+        "成熟度不高于 direction-locked",
+        "列出平面、剖面、尺度、流线和相机等缺口",
+        "提供可执行的外部 Blockout Brief",
+        "Production Review 为 blocked 或 revise"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "AI 新发现只进入候选反馈",
+      "prompt": "生成图里意外出现了一种很适合当地的升降桥和新徽记，把它们直接写回世界观。",
+      "expected_output": "分别审查升降桥和徽记的因果、功能与权威边界，整理为原子候选；没有用户明确采纳时拒绝直接晋升正典。",
+      "assertions": [
+        "把升降桥和徽记拆成独立原子主张",
+        "区分画面占位与有因果证据的候选",
+        "记录受影响下游和需要的作者决定",
+        "没有自动写入 Vault、Wiki 或 canon"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "无图像工具的完整降级",
+      "prompt": "当前宿主没有图像生成工具，请完成一张山地聚落概念图的制作交接。",
+      "expected_output": "仍完成 Production Brief、在线研究、因果链、方向、空间检查、Shot Card、完整 Prompt、Avoid、审查清单和保存建议，并明确图像未生成。",
+      "assertions": [
+        "没有假装已经生成或检查图像",
+        "仍完成 Reference Gate 与 Direction Gate",
+        "交付包含 Shot Card、Visual Evidence、Prompt 和 Avoid",
+        "成熟度保持 exploration 或 direction-locked",
+        "指出接收图像工具后的下一项唯一动作"
+      ]
+    }
+  ]
+}

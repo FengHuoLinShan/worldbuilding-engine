@@ -1,7 +1,7 @@
 {
   "name": "worldbuilding-engine",
-  "version": "0.7.0+codex.20260820150946",
-  "description": "Turn creative seeds or accumulated drafts into an auditable world model, then bridge verified writing craft into the owning fiction artifact.",
+  "version": "0.7.0+codex.20260821044519",
+  "description": "Turn creative seeds or accumulated drafts into an auditable world model, create production-aware world concept designs, and bridge verified writing craft into the owning fiction artifact.",
   "author": {
     "name": "FengHuoLinShan",
     "url": "https://github.com/FengHuoLinShan/worldbuilding-engine"
@@ -15,6 +15,7 @@
     "category": "Writing",
     "capabilities": [
       "Worldbuilding design",
+      "World concept design",
       "Realism audit",
       "Canon governance",
       "Convergent iteration",

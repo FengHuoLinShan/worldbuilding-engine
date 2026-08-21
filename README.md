@@ -1,12 +1,13 @@
 # 世界观创设引擎
 
-一套面向奇幻、科幻、架空历史与其他叙事世界的通用工具箱。它把灵感、候选设定和既有世界书整理为可追溯、可审查、能收敛的世界观工程，并提供写作技法蒸馏、候选反向审查和世界书增量门禁。
+一套面向奇幻、科幻、架空历史与其他叙事世界的通用工具箱。它把灵感、候选设定和既有世界书整理为可追溯、可审查、能收敛的世界观工程，并提供专业视觉概念设计、写作技法蒸馏、候选反向审查和世界书增量门禁。
 
 > A general-purpose toolkit for auditable worldbuilding, candidate review, transferable fiction craft, and content-addressed worldbook checks.
 
 ## 包含内容
 
 - `worldbuilding-engine`：世界模型、因果账本、社会再生产、知识边界、正典治理与迭代收敛。
+- `world-concept-designer`：从 Production Brief、正典、因果和视觉证据进入参考、方向、空间、图像、审查与生产交接。
 - `worldbuilding-candidate-audit`：对尚未被作者采用的对话候选进行证据化反向审查。
 - `distill-novel-craft`：从用户合法提供的文本中提炼可迁移机制，并做“问题—策略—代价”功能对照。
 - `tools/worldcheck`：显式配置、只读扫描、ReviewPacket/Receipt 与 v2 派生状态。
@@ -25,6 +26,7 @@ Codex 可通过本地 marketplace 安装本插件；也可把 `skills/` 下需�
 
 ```sh
 ln -s "$PWD/skills/worldbuilding-engine" ~/.dsh/skills/worldbuilding-engine
+ln -s "$PWD/skills/world-concept-designer" ~/.dsh/skills/world-concept-designer
 ln -s "$PWD/skills/worldbuilding-candidate-audit" ~/.dsh/skills/worldbuilding-candidate-audit
 ln -s "$PWD/skills/distill-novel-craft" ~/.dsh/skills/distill-novel-craft
 ```
