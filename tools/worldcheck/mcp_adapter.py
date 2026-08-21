@@ -260,6 +260,7 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
     try:
         completed = subprocess.run(
             [RUBY, CLI, *args, "--config", config, "--json"],
+            cwd=Path(config).expanduser().parent,
             input=stdin,
             text=True,
             stdout=subprocess.PIPE,

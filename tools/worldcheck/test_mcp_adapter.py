@@ -103,6 +103,7 @@ class McpAdapterTest(unittest.TestCase):
                 [MCP.RUBY, MCP.CLI, "status", "--config", "/safe/project/worldcheck.json", "--json"],
                 run.call_args.args[0],
             )
+            self.assertEqual(Path("/safe/project"), run.call_args.kwargs["cwd"])
             invalid = subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr="")
             with mock.patch.object(MCP.subprocess, "run", return_value=invalid):
                 with self.assertRaisesRegex(MCP.ToolError, "invalid JSON: exit 0"):
