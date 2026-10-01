@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 CLI = str(Path(__file__).with_name("worldcheck"))
 RUBY = "ruby"
 PROTOCOL_VERSION = "2025-11-25"
@@ -264,8 +263,7 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
             cwd=Path(config).expanduser().parent,
             input=stdin,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=60,
             check=False,
             shell=False,
@@ -385,6 +383,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> int:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -392,16 +392,16 @@ def main() -> int:
         try:
             request = json.loads(line)
             if not isinstance(request, dict):
-                raise ValueError("request must be an object")
+                raise TypeError("request must be an object")
             response = handle(request)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
             response = {
                 "jsonrpc": "2.0",
                 "id": None,
                 "error": {"code": -32700, "message": str(exc)},
             }
-        except Exception as exc:  # Last-resort containment: stdout must remain JSON-RPC only.
-            print(f"worldcheck adapter error: {exc}", file=sys.stderr)
+        except Exception:  # noqa: BLE001 - Protocol boundary: stdout remains JSON-RPC and errors expose no internals.
+            print("worldcheck adapter internal error", file=sys.stderr)
             response = {
                 "jsonrpc": "2.0",
                 "id": request.get("id") if isinstance(request, dict) else None,

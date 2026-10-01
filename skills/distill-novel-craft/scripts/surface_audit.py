@@ -8,14 +8,12 @@ literary quality, character voice, scene causality, or authorial intent.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from itertools import islice
+from itertools import islice, pairwise
 from typing import Any
-
 
 PROBE_VERSION = "1.0.1"
 NORMALIZATION_PROFILE = "zh-fiction-v1"
@@ -246,7 +244,7 @@ def audit_surface(
     if numbers:
         ordered_numbers = sorted(set(numbers))
         missing_ranges = [{"start": left + 1, "end": right - 1}
-                          for left, right in zip(ordered_numbers, ordered_numbers[1:]) if right - left > 1]
+                          for left, right in pairwise(ordered_numbers) if right - left > 1]
         missing_count = sum(item["end"] - item["start"] + 1 for item in missing_ranges)
         missing_numbers = list(islice((number for item in missing_ranges for number in range(item["start"], item["end"] + 1)), 1000))
     empty_chapters = [chapter["label"] for chapter in chapters if not compact(chapter["body"])]
@@ -482,9 +480,7 @@ def audit_surface(
 
     apply_exceptions(findings, exceptions, input_hash)
     statuses = {finding["status"] for finding in findings}
-    if blockers:
-        surface_gate = "FAIL"
-    elif "FAIL" in statuses:
+    if blockers or "FAIL" in statuses:
         surface_gate = "FAIL"
     elif "WARN" in statuses:
         surface_gate = "WARN"

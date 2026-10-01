@@ -6,7 +6,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 SERVER = Path(__file__).with_name("server.py")
 
 

@@ -37,4 +37,9 @@
 
 ## 第5轮：独立分发与发布
 
-待执行。
+- 新增绝对路径客户端配置生成器，optional 文件检查与候选存储默认关闭；提供固定版本安装说明和 Linux/macOS CI。
+- 新候选库 POSIX权限0600，stdio 固定 UTF-8；最低 Python3.10.20 实际运行25个核心 Python tests，而非只做语法检查。
+- 完整本地回归：25 core Python + 7 adapter + 9 Ruby engine + 16 Ruby Worldcheck = 57 tests；Ruby合计119 assertions，全部通过。官方 mcp2.2.0/jsonschema4.26.0 实际客户端全部17工具、prompts/resources与完整合成世界书回执流程通过。
+- Ruff（target py310）检查修改涉及的 Python 工具、测试和表面审计通过；git diff --check 通过；NovelCraft 收尾 docs-check BASE_REF=origin/main 通过。
+- 独立包用 Git 固定对象归档，保留 RIGHTS；不纳入工作区WIP、真实作品、候选库、原始请求、私有路径或密钥。包的固定 SHA、文件校验和与独立启动结果随 release-manifest.json 发布，远端CI状态以该 SHA 的 Actions 为准。
+- 本版本交付工程能力；真实模型写作/编辑质量、作者采用、Windows 实机、公开HTTP鉴权与生产部署未验收，工具包不宣称这些状态。

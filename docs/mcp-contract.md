@@ -50,7 +50,7 @@
 }
 ```
 
-目录须预先存在。只创建一个 `worldbuilding-candidates.sqlite3`；目录由宿主固定，工具不能更换路径或项目。
+目录须预先存在。只创建一个 `worldbuilding-candidates.sqlite3`（POSIX 新文件权限0600）；目录由宿主固定，工具不能更换路径或项目。
 候选只能 draft/proposed，保存前重算写作包与引文。SQLite 短事务保护 head/CAS/operation 回执，旧修订仅追加。
 同内容与同来源的 no_change 保留 revision；operation 重放必须完整参数相同。内容、任务或来源变化均需新 operation。
 历史读取只证明已保存记录的完整性，返回 freshness=not_revalidated；继续写作须再提供当前来源。

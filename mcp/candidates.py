@@ -9,7 +9,6 @@ from pathlib import Path
 from contracts import ContractError, validate
 from workflow import CANDIDATE, HASH, IDENTITY, WRITING, candidate_check, digest, tool
 
-
 TOOLS = [
     tool("world_candidate_save", "Save draft/proposed candidate history to the host-configured project workspace. Checks current source binding, CAS and retry identity; never writes canon.", {
         "type": "object", "additionalProperties": False,
@@ -54,6 +53,12 @@ def save(arguments):
     request_hash = digest(arguments)
     candidate_id = arguments["candidate_id"]
     candidate_json = json.dumps(arguments["candidate"], ensure_ascii=False, sort_keys=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        os.close(descriptor)
     database = sqlite3.connect(path, timeout=10, isolation_level=None)
     database.row_factory = sqlite3.Row
     try:

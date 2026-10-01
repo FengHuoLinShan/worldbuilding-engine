@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from typing import Any
-
 
 SERVER = Path(__file__).resolve().with_name("server.py")
 LENSES = [
@@ -22,7 +22,7 @@ LENSES = [
 class MCPServerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.process = subprocess.Popen(
-            ["python3", str(SERVER)],
+            [sys.executable, str(SERVER)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import candidates as store
 from contracts import ContractError
-from test_workflow import request, candidate
+from test_workflow import candidate, request
 
 
 class CandidateTest(unittest.TestCase):
@@ -28,6 +28,8 @@ class CandidateTest(unittest.TestCase):
 
     def test_save_retry_revision_history_and_no_change(self):
         first = store.call_tool("world_candidate_save", self.args)
+        if os.name == "posix":
+            self.assertEqual(0o600, store.configured_store()[0].stat().st_mode & 0o777)
         self.assertEqual(first, store.call_tool("world_candidate_save", self.args))
         latest = store.call_tool("world_candidate_read", {"candidate_id": "town"})
         self.assertEqual("not_revalidated", latest["freshness"])
@@ -80,9 +82,8 @@ class CandidateTest(unittest.TestCase):
         self.assertTrue(any("head changed" in result for result in results if isinstance(result, str)))
 
     def test_default_disabled_and_unknown_candidate_read_has_no_write(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(ContractError, "disabled"):
-                store.call_tool("world_candidate_save", self.args)
+        with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(ContractError, "disabled"):
+            store.call_tool("world_candidate_save", self.args)
         with self.assertRaisesRegex(ContractError, "no saved"):
             store.call_tool("world_candidate_read", {"candidate_id": "missing"})
         self.assertEqual([], os.listdir(self.directory.name))

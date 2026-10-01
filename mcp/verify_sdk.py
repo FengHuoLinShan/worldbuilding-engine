@@ -1,6 +1,6 @@
 """Official SDK interoperability on synthetic input. SDK/jsonschema are test-only.
 
-Run: uv run --no-project --with 'mcp>=2,<3' --with jsonschema python mcp/test_sdk.py
+Run: uv run --no-project --with 'mcp==2.2.0' --with 'jsonschema==4.26.0' python mcp/verify_sdk.py
 """
 
 import asyncio
@@ -13,11 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
-from mcp import Client
 from mcp.client.stdio import StdioServerParameters
-
 from test_workflow import request
 
+from mcp import Client
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -35,8 +34,8 @@ async def check():
         config.write_text(json.dumps({"schema_version": 1, "project_id": "sdk-fixture", "content_root": "worldbook",
                                       "page_globs": ["**/*.md"], "policy_files": []}), encoding="utf-8")
         environment["WORLDCHECK_CONFIG"] = str(config)
-        baseline = subprocess.run(["ruby", str(ROOT / "tools/worldcheck/worldcheck"), "check", "--full", "--config", str(config), "--json"],
-                                  env=environment, capture_output=True, text=True, check=True)
+        baseline = await asyncio.to_thread(subprocess.run, ["ruby", str(ROOT / "tools/worldcheck/worldcheck"), "check", "--full", "--config", str(config), "--json"],
+                                           env=environment, capture_output=True, text=True, encoding="utf-8", check=True)
         assert json.loads(baseline.stdout)["ok"]
         transport = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/server.py")], env=environment, cwd=temporary)
         async with Client(transport, read_timeout_seconds=70) as client:

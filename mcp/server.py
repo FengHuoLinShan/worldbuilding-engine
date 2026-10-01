@@ -3,18 +3,17 @@
 
 from __future__ import annotations
 
-import json
 import importlib.util
+import json
 import runpy
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from contracts import ContractError, validate
-import workflow
 import candidates
-
+import workflow
+from contracts import ContractError, validate
 
 VERSION = "0.8.0"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -865,6 +864,8 @@ def reject_constant(value):
 
 
 def main() -> int:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     while raw_line := sys.stdin.readline(MAX_REQUEST_CHARS + 1):
         message = None
         try:
@@ -883,7 +884,7 @@ def main() -> int:
                 outgoing = handle(message)
         except (json.JSONDecodeError, ValueError) as exc:
             outgoing = error_response(None, -32700, f"Parse error: {exc}")
-        except Exception:
+        except Exception:  # noqa: BLE001 - JSON-RPC boundary contains failures without leaking a traceback.
             outgoing = error_response(message.get("id") if isinstance(message, dict) else None, -32603, "Internal error")
         if outgoing is not None:
             sys.stdout.write(json.dumps(outgoing, ensure_ascii=False, separators=(",", ":")) + "\n")

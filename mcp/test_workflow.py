@@ -3,8 +3,8 @@
 import copy
 import unittest
 
-from contracts import ContractError
 import workflow as w
+from contracts import ContractError
 
 
 def context():
