@@ -1,5 +1,7 @@
 # MCP 适配层契约
 
+当前通用服务为 0.8.0：17 tools、14写作 prompts、2个只读 resources。新增来源/知识边界、候选保存/CAS/历史及整合 Worldcheck 的权威契约见 [通用 MCP 契约](../../../docs/mcp-contract.md)。以下说明保持兼容的原七个只读计算工具。
+
 ## 1. 定位
 
 MCP 适配层把模板、结构校验、真实性审计、fiction-core 路由、写作分析骨架和确定性文本表面审计暴露给支持 MCP 的模型。它不是第二个语言模型，也不在服务端隐藏调用外部模型。
@@ -138,11 +140,11 @@ constraint_partition:
 
 ## 6. 版本
 
-- MCP/server：`0.5.0`；
-- MCP 协议：`2025-03-26`；
+- MCP/server：`0.8.0`（原七工具接口保持兼容）；
+- MCP 默认协议：`2025-11-25`，协商支持旧协议；
 - world-state schema：`0.1.0`；
 - craft packet：`0.3.0`；
-- surface probe：`1.0.0`；
+- surface probe：`1.0.1`（超大章号缺口以区间与计数记录，编号样例最多1000项）；
 - review contract：`0.1.0`。
 
 世界状态 schema 本轮无迁移。

@@ -276,7 +276,19 @@ module Worldcheck
     attr_reader :root
 
     def initialize(project_id, root = nil)
-      @root = root || File.join(Dir.home, "Library", "Application Support", "worldcheck", project_id)
+      state_home = ENV["XDG_STATE_HOME"]
+      if state_home && !state_home.empty?
+        raise Failure.new("state-path-invalid", "XDG_STATE_HOME 必须为绝对路径") unless Pathname.new(state_home).absolute?
+      else
+        state_home = if RUBY_PLATFORM.match?(/darwin/)
+                       File.join(Dir.home, "Library", "Application Support")
+                     elsif RUBY_PLATFORM.match?(/mswin|mingw/)
+                       ENV["LOCALAPPDATA"] || File.join(Dir.home, "AppData", "Local")
+                     else
+                       File.join(Dir.home, ".local", "state")
+                     end
+      end
+      @root = root || File.join(state_home, "worldcheck", project_id)
       @state_path = File.join(@root, "state.json")
       @lock_path = File.join(@root, "worldcheck.lock")
     end

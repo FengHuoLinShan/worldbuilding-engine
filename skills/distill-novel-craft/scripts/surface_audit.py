@@ -13,10 +13,11 @@ import math
 import re
 import unicodedata
 from collections import Counter, defaultdict
+from itertools import islice
 from typing import Any
 
 
-PROBE_VERSION = "1.0.0"
+PROBE_VERSION = "1.0.1"
 NORMALIZATION_PROFILE = "zh-fiction-v1"
 SEGMENTATION_PROFILE = "markdown-zh-chapter-v1"
 BOUNDARY_DEFAULTS = ["不是", "不能", "不等于", "不得", "没有", "不把", "不替", "只限", "只覆盖"]
@@ -185,7 +186,19 @@ def audit_surface(
     policy = policy or {}
     exceptions = exceptions or []
     thresholds = dict(DEFAULT_THRESHOLDS)
-    thresholds.update(policy.get("thresholds") or {})
+    overrides = policy.get("thresholds") or {}
+    for key, value in overrides.items():
+        if key not in thresholds or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("invalid surface threshold")
+        if key in {"repeated_phrase_length", "repeated_phrase_min_occurrences", "repeated_phrase_min_chapters", "chapter_surface_similarity_run"}:
+            if not 1 <= value <= 200_000 or value != int(value):
+                raise ValueError("count thresholds must be positive bounded integers")
+        elif "per_1k" in key:
+            if not 0 <= value <= 200_000:
+                raise ValueError("lexeme threshold out of range")
+        elif not 0 <= value <= 1:
+            raise ValueError("ratio threshold must be between zero and one")
+    thresholds.update(overrides)
     boundary_lexemes = policy.get("boundary_lexemes") or BOUNDARY_DEFAULTS
     institution_lexemes = policy.get("institution_lexemes") or INSTITUTION_DEFAULTS
     ordered_sequences = policy.get("ordered_sequences") or []
@@ -228,8 +241,14 @@ def audit_surface(
     numbers = [chapter.get("number") for chapter in chapters if isinstance(chapter.get("number"), int)]
     duplicate_numbers = sorted(number for number, count in Counter(numbers).items() if count > 1)
     missing_numbers: list[int] = []
+    missing_ranges: list[dict[str, int]] = []
+    missing_count = 0
     if numbers:
-        missing_numbers = sorted(set(range(min(numbers), max(numbers) + 1)) - set(numbers))
+        ordered_numbers = sorted(set(numbers))
+        missing_ranges = [{"start": left + 1, "end": right - 1}
+                          for left, right in zip(ordered_numbers, ordered_numbers[1:]) if right - left > 1]
+        missing_count = sum(item["end"] - item["start"] + 1 for item in missing_ranges)
+        missing_numbers = list(islice((number for item in missing_ranges for number in range(item["start"], item["end"] + 1)), 1000))
     empty_chapters = [chapter["label"] for chapter in chapters if not compact(chapter["body"])]
     if duplicate_numbers:
         blockers.append("duplicate_chapter_numbers")
@@ -499,6 +518,9 @@ def audit_surface(
             "expected_char_match_ratio": round(expected_char_match_ratio, 6) if expected_char_match_ratio is not None else None,
             "duplicate_chapter_numbers": duplicate_numbers,
             "missing_chapter_numbers": missing_numbers,
+            "missing_chapter_ranges": missing_ranges,
+            "missing_chapter_count": missing_count,
+            "missing_chapter_numbers_truncated": missing_count > len(missing_numbers),
             "empty_chapters": empty_chapters,
         },
         "metrics": {

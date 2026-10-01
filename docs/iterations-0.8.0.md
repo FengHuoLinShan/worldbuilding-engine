@@ -27,7 +27,13 @@
 
 ## 第4轮：对抗与互操作
 
-待执行。
+- 发现并封住 Worldcheck target 被解释为 --record/--config 等 CLI 选项的入口；控制字符、过量目标与超大 review budget 拒绝。
+- 补14个标准 MCP prompts 与2个固定 URI resources；通知不调用写工具，参数/信封错误、重复 JSON key、非有限数字、超量请求拒绝且后续请求仍可用。
+- 候选 revision hash 同时绑定内容与来源检查，损坏检查记录读取失败关闭；Worldcheck 状态支持标准 XDG 与 Linux/Windows 默认目录，保留 macOS 旧路径。
+- 发现原 surface_audit 按最大章号展开 range 可造成无界内存、负 repeated_phrase_length 可造成超大循环；在共享计算处修复，缺号以完整区间/总数和最多1000条样例表示，阈值限制为已知有限值。
+- 主 MCP10、protocol3、candidate5、Worldcheck Ruby16（81 assertions）、adapter7通过。
+- 官方 mcp==2.2.0 + jsonschema==4.26.0 独立客户端：17工具全部实际调用并验证声明 schema、14 prompts、2 resources，异地 cwd 运行的合成生成/检查/保存/读取与世界书 baseline→变化→packet→receipt→status 全通过。
+- SDK 样例候选是宿主手写合成内容，没有付费模型；不是理法之环文学质量验收。
 
 ## 第5轮：独立分发与发布
 

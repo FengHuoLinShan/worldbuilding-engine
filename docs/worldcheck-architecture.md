@@ -55,4 +55,4 @@ MCP 不提供文件浏览、完整门禁或世界书写入工具。
 
 ## 状态与安全边界
 
-派生状态默认位于用户应用数据目录的 `worldcheck/<project_id>/`，不进入世界书。状态 schema 为 v2，旧版本被明确拒绝，不隐式迁移。扫描前后会重新计算 manifest 与 policy hash；读取期间变化、路径越界、重复标题、非法 target、陈旧 Receipt 和未通过的完整门禁都会阻止 checkpoint 前进。
+派生状态位于用户应用数据目录的 `worldcheck/<project_id>/`，不进入世界书。宿主可设置绝对路径 `XDG_STATE_HOME`；默认 macOS 沿用 `~/Library/Application Support`，Linux 为 `~/.local/state`，Windows 为 `LOCALAPPDATA`。状态 schema 为 v2，旧版本被明确拒绝，不隐式迁移。扫描前后会重新计算 manifest 与 policy hash；读取期间变化、路径越界、重复标题、非法 target、陈旧 Receipt 和未通过的完整门禁都会阻止 checkpoint 前进。

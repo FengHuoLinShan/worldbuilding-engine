@@ -257,6 +257,7 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
     config = os.environ.get("WORLDCHECK_CONFIG")
     if not config:
         raise ToolError("WORLDCHECK_CONFIG is required")
+    config = str(Path(config).expanduser().resolve())
     try:
         completed = subprocess.run(
             [RUBY, CLI, *args, "--config", config, "--json"],
@@ -270,12 +271,11 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
             shell=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ToolError(f"worldcheck CLI unavailable: {exc}") from exc
+        raise ToolError("worldcheck CLI unavailable or timed out") from exc
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        detail = completed.stderr.strip() or f"exit {completed.returncode}"
-        raise ToolError(f"worldcheck CLI returned invalid JSON: {detail}") from exc
+        raise ToolError(f"worldcheck CLI returned invalid JSON: exit {completed.returncode}") from exc
     if completed.returncode == 2:
         issues = payload.get("issues", [])
         detail = issues[0].get("message", "invalid request") if issues else "invalid request"
@@ -285,6 +285,11 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
     return payload
 
 
+def validate_target(target):
+    if not isinstance(target, str) or not target.strip() or len(target) > 1000 or target.startswith("-") or any(ord(char) < 32 for char in target):
+        raise ToolError("target must be a non-empty page reference, not a command option")
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == "worldcheck_prepare_review":
         if set(arguments) - {"targets", "budget_chars"}:
@@ -292,11 +297,15 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         targets = arguments.get("targets", [])
         if not isinstance(targets, list) or not all(isinstance(item, str) for item in targets):
             raise ToolError("targets must be an array of strings")
+        if len(targets) > 512:
+            raise ToolError("at most 512 review targets are allowed")
+        for target in targets:
+            validate_target(target)
         args = ["review", *targets]
         if "budget_chars" in arguments:
             budget = arguments["budget_chars"]
-            if not isinstance(budget, int) or isinstance(budget, bool) or budget < 2000:
-                raise ToolError("budget_chars must be an integer >= 2000")
+            if not isinstance(budget, int) or isinstance(budget, bool) or not 2000 <= budget <= 200_000:
+                raise ToolError("budget_chars must be an integer from 2000 to 200000")
             args += ["--budget-chars", str(budget)]
         payload = run_cli(args)
         if "packet" not in payload:
@@ -322,6 +331,8 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         target = arguments.get("target")
         if target is not None and not isinstance(target, str):
             raise ToolError("target must be a string")
+        if target is not None:
+            validate_target(target)
         return run_cli(["status"] + ([target] if target else []))
     raise ToolError(f"unknown tool: {name}")
 

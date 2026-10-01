@@ -85,6 +85,21 @@ class MCPServerTest(unittest.TestCase):
         negotiated = self.request("initialize", {"protocolVersion": "invented"}, 51)
         self.assertEqual("2025-11-25", negotiated["result"]["protocolVersion"])
 
+    def test_surface_extreme_chapter_gap_and_negative_threshold_are_bounded(self) -> None:
+        result = self.call("world_text_surface_audit", {
+            "text": "### 第1章 起点\n他搬盐。\n### 第999999999章 终点\n他停下。",
+            "scope_manifest": {"scope_kind": "chapter_sample"},
+        }, 60)["structuredContent"]
+        self.assertEqual(999999997, result["parse"]["missing_chapter_count"])
+        self.assertEqual(1000, len(result["parse"]["missing_chapter_numbers"]))
+        self.assertTrue(result["parse"]["missing_chapter_numbers_truncated"])
+        self.assertEqual("FAIL", result["gates"]["surface_regression_gate"])
+        failed = self.call("world_text_surface_audit", {
+            "text": "他搬盐。", "scope_manifest": {"scope_kind": "excerpt"},
+            "policy": {"thresholds": {"repeated_phrase_length": -999999999}},
+        }, 61)
+        self.assertTrue(failed["isError"])
+
     def test_template_validate_audit_and_route(self) -> None:
         template = self.call(
             "world_project_template",

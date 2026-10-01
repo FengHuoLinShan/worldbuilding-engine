@@ -73,7 +73,7 @@ def save(arguments):
             raise ContractError("candidate head changed: read the current revision before saving")
         unchanged = row is not None and row["candidate_json"] == candidate_json
         revision_hash = head if unchanged else digest({"project_id": project_id, "candidate_id": candidate_id,
-                                                       "parent_hash": head, "candidate": arguments["candidate"]})
+                                                       "parent_hash": head, "candidate": arguments["candidate"], "source_check": check})
         if not unchanged:
             database.execute("INSERT INTO revisions VALUES (?,?,?,?,?,?,?)",
                              (project_id, candidate_id, revision_hash, head, candidate_json,
@@ -111,13 +111,15 @@ def read(arguments):
         if row is None:
             raise ContractError("candidate revision not found in configured project")
         candidate = json.loads(row["candidate_json"])
+        validate(candidate, CANDIDATE, "stored candidate")
+        check = json.loads(row["check_json"])
         expected = digest({"project_id": project_id, "candidate_id": arguments["candidate_id"],
-                           "parent_hash": row["parent_hash"], "candidate": candidate})
+                           "parent_hash": row["parent_hash"], "candidate": candidate, "source_check": check})
         if row["revision_hash"] != expected:
             raise ContractError("stored candidate integrity check failed")
         return {"project_id": project_id, "candidate_id": arguments["candidate_id"], "revision_hash": expected,
                 "parent_hash": row["parent_hash"], "candidate": candidate, "created_at": row["created_at"],
-                "source_check": json.loads(row["check_json"]), "freshness": "not_revalidated",
+                "source_check": check, "freshness": "not_revalidated",
                 "canon_promoted": False, "semantic_truth_verified": False}
     finally:
         database.close()

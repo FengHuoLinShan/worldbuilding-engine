@@ -2,6 +2,7 @@
 
 import copy
 import os
+import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -85,6 +86,14 @@ class CandidateTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "no saved"):
             store.call_tool("world_candidate_read", {"candidate_id": "missing"})
         self.assertEqual([], os.listdir(self.directory.name))
+
+    def test_corrupt_stored_check_fails_closed(self):
+        store.call_tool("world_candidate_save", self.args)
+        path, _ = store.configured_store()
+        with sqlite3.connect(path) as database:
+            database.execute("UPDATE revisions SET check_json=?", ('{"semantic_truth_verified":true}',))
+        with self.assertRaisesRegex(ContractError, "integrity"):
+            store.call_tool("world_candidate_read", {"candidate_id": "town"})
 
 
 if __name__ == "__main__":

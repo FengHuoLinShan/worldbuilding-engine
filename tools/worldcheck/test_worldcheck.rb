@@ -49,6 +49,16 @@ class WorldcheckTest < Minitest::Test
     FileUtils.remove_entry(@tmp) if File.exist?(@tmp)
   end
 
+  def test_host_configured_state_directory
+    previous = ENV["XDG_STATE_HOME"]
+    ENV["XDG_STATE_HOME"] = File.join(@tmp, "portable-state")
+    assert_equal File.join(@tmp, "portable-state", "worldcheck", "portable-project"), Worldcheck::Store.new("portable-project").root
+    ENV["XDG_STATE_HOME"] = "relative"
+    assert_raises(Worldcheck::Failure) { Worldcheck::Store.new("portable-project") }
+  ensure
+    previous ? ENV["XDG_STATE_HOME"] = previous : ENV.delete("XDG_STATE_HOME")
+  end
+
   def test_full_gate_failure_does_not_replace_checkpoint
     before = File.read(File.join(@state_root, "state.json"))
     File.write(File.join(@scripts, "fail"), "1")

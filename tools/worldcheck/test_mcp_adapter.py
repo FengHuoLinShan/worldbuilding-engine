@@ -112,7 +112,7 @@ class McpAdapterTest(unittest.TestCase):
                 args=[], returncode=126, stdout="", stderr="sandbox denied child process"
             )
             with mock.patch.object(MCP.subprocess, "run", return_value=blocked):
-                with self.assertRaisesRegex(MCP.ToolError, "sandbox denied child process"):
+                with self.assertRaisesRegex(MCP.ToolError, "exit 126"):
                     MCP.run_cli(["status"])
             with mock.patch.object(MCP.subprocess, "run", side_effect=subprocess.TimeoutExpired([], 60)):
                 with self.assertRaisesRegex(MCP.ToolError, "unavailable"):
@@ -122,6 +122,15 @@ class McpAdapterTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(MCP.ToolError, "WORLDCHECK_CONFIG is required"):
                 MCP.run_cli(["status"])
+
+    def test_targets_cannot_inject_cli_options(self) -> None:
+        for target in ["--record", "--config", "--full", "", "\nAlpha", "-", "x" * 1001]:
+            with mock.patch.object(MCP, "run_cli", autospec=True) as run:
+                with self.assertRaises(MCP.ToolError):
+                    MCP.call_tool("worldcheck_prepare_review", {"targets": [target]})
+                with self.assertRaises(MCP.ToolError):
+                    MCP.call_tool("worldcheck_status", {"target": target})
+                run.assert_not_called()
 
     def test_stdio_stdout_is_json_rpc_only(self) -> None:
         requests = "\n".join(

@@ -24,6 +24,7 @@ SURFACE_AUDIT = PLUGIN_ROOT / "skills" / "distill-novel-craft" / "scripts" / "su
 PROTOCOL_VERSION = "2025-11-25"
 SUPPORTED_PROTOCOLS = {"2024-11-05", "2025-03-26", "2025-06-18", PROTOCOL_VERSION}
 MAX_CRAFT_TEXT_CHARS = 200_000
+MAX_REQUEST_CHARS = 1_000_000
 REVIEW_CONTRACT_VERSION = "0.1.0"
 
 DIAGNOSTIC_LENSES = [
@@ -274,6 +275,13 @@ for tool in TOOLS:
     tool["annotations"] = {"readOnlyHint": not writes, "destructiveHint": False, "openWorldHint": False}
     tool.setdefault("outputSchema", {"type": "object"})
 TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
+PROMPTS = [{"name": "worldbuilding_" + mode, "description": description,
+            "arguments": [{"name": "request_json", "description": "JSON object matching world_write_packet arguments, including this mode and inline sources", "required": True}]}
+           for mode, description in workflow.MODES.items()]
+RESOURCE_FILES = {
+    "worldbuilding://contract": ("通用 MCP 契约", PLUGIN_ROOT / "docs" / "mcp-contract.md"),
+    "worldbuilding://capabilities": ("能力迁移清单", PLUGIN_ROOT / "docs" / "capability-map.md"),
+}
 
 
 class ToolFailure(RuntimeError):
@@ -710,7 +718,7 @@ def call_tool(params: dict[str, Any]) -> dict[str, Any]:
     arguments = params.get("arguments", {})
     if not isinstance(arguments, dict):
         raise ToolFailure("arguments must be an object")
-    if name not in TOOL_BY_NAME:
+    if not isinstance(name, str) or name not in TOOL_BY_NAME:
         raise ToolFailure("Unknown tool")
     try:
         validate(arguments, TOOL_BY_NAME[name]["inputSchema"])
@@ -770,14 +778,22 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     method = message.get("method")
     request_id = message.get("id")
     params = message.get("params", {})
+    if message.get("jsonrpc") != "2.0" or not isinstance(method, str) or (request_id is not None and (isinstance(request_id, bool) or not isinstance(request_id, (str, int)))):
+        return error_response(None, -32600, "Invalid JSON-RPC request")
+    if "id" not in message:
+        return None
+    if request_id is None:
+        return error_response(None, -32600, "Request id must be a string or integer")
+    if not isinstance(params, dict):
+        return error_response(request_id, -32602, "params must be an object")
 
     if method == "initialize":
         requested = params.get("protocolVersion") if isinstance(params, dict) else None
         return response(
             request_id,
             {
-                "protocolVersion": requested if requested in SUPPORTED_PROTOCOLS else PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
+                "protocolVersion": requested if isinstance(requested, str) and requested in SUPPORTED_PROTOCOLS else PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}, "prompts": {"listChanged": False}, "resources": {}},
                 "serverInfo": {"name": "worldbuilding-engine", "version": VERSION},
                 "instructions": (
                     "Use the tools for deterministic state templates, validation, realism audit, "
@@ -802,24 +818,69 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
         except ToolFailure as exc:
             return response(request_id, tool_result({"error": str(exc)}, is_error=True))
     if method == "resources/list":
-        return response(request_id, {"resources": []})
+        return response(request_id, {"resources": [{"uri": uri, "name": title, "mimeType": "text/markdown"}
+                                                   for uri, (title, _) in RESOURCE_FILES.items()]})
+    if method == "resources/templates/list":
+        return response(request_id, {"resourceTemplates": []})
+    if method == "resources/read":
+        uri = params.get("uri")
+        if not isinstance(uri, str) or uri not in RESOURCE_FILES:
+            return error_response(request_id, -32602, "Unknown bundled resource")
+        try:
+            return response(request_id, {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": RESOURCE_FILES[uri][1].read_text(encoding="utf-8")}]})
+        except OSError:
+            return error_response(request_id, -32603, "Bundled resource unavailable")
     if method == "prompts/list":
-        return response(request_id, {"prompts": []})
+        return response(request_id, {"prompts": PROMPTS})
+    if method == "prompts/get":
+        try:
+            name = params.get("name")
+            if name not in {item["name"] for item in PROMPTS} or set(params.get("arguments", {})) != {"request_json"}:
+                raise ContractError("Unknown prompt or invalid prompt arguments")
+            request = json.loads(params["arguments"]["request_json"], object_pairs_hook=strict_object, parse_constant=reject_constant)
+            validate(request, workflow.WRITING)
+            if request["mode"] != name.removeprefix("worldbuilding_"):
+                raise ContractError("Prompt mode does not match request")
+            packet = workflow.write_packet(request)
+            return response(request_id, {"description": workflow.MODES[request["mode"]],
+                                         "messages": [{"role": "user", "content": {"type": "text", "text": packet["host_prompt"]}}]})
+        except (ContractError, ValueError, TypeError, KeyError):
+            return error_response(request_id, -32602, "Invalid or unavailable source-bound writing prompt")
     if request_id is None:
         return None
     return error_response(request_id, -32601, f"Method not found: {method}")
 
 
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def reject_constant(value):
+    raise ValueError("non-finite JSON number")
+
+
 def main() -> int:
-    for raw_line in sys.stdin:
-        if not raw_line.strip():
-            continue
+    while raw_line := sys.stdin.readline(MAX_REQUEST_CHARS + 1):
         message = None
         try:
-            message = json.loads(raw_line)
+            if len(raw_line) > MAX_REQUEST_CHARS:
+                while not raw_line.endswith("\n"):
+                    raw_line = sys.stdin.readline(MAX_REQUEST_CHARS + 1)
+                    if not raw_line:
+                        break
+                raise ValueError("request exceeds character budget")
+            if not raw_line.strip():
+                continue
+            message = json.loads(raw_line, object_pairs_hook=strict_object, parse_constant=reject_constant)
             if not isinstance(message, dict):
-                raise ValueError("request must be an object")
-            outgoing = handle(message)
+                outgoing = error_response(None, -32600, "Request must be an object")
+            else:
+                outgoing = handle(message)
         except (json.JSONDecodeError, ValueError) as exc:
             outgoing = error_response(None, -32700, f"Parse error: {exc}")
         except Exception:
