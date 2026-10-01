@@ -41,8 +41,8 @@ class WorldcheckTest < Minitest::Test
     @project = Worldcheck::Project.load(config_path)
     @state_root = File.join(@tmp, "state")
     @app = Worldcheck::App.new(@project, @state_root)
-    code, = @app.check([], full: true)
-    assert_equal 0, code
+    code, result = @app.check([], full: true)
+    assert_equal 0, code, result.to_json
   end
 
   def teardown
@@ -57,6 +57,16 @@ class WorldcheckTest < Minitest::Test
     assert_raises(Worldcheck::Failure) { Worldcheck::Store.new("portable-project") }
   ensure
     previous ? ENV["XDG_STATE_HOME"] = previous : ENV.delete("XDG_STATE_HOME")
+  end
+
+  def test_safe_frontmatter_rejects_object_tags_and_aliases
+    ["injected: !ruby/object:Object {}", "left: &value test\nright: *value"].each do |unsafe|
+      text = frontmatter("Alpha").sub("related: []", unsafe) + "# Alpha\nunsafe data\n"
+      File.write(page_path("Alpha.md"), text)
+      code, result = @app.check([], full: true)
+      assert_equal 1, code
+      assert result["issues"].any? { |item| item["code"] == "frontmatter-invalid" }
+    end
   end
 
   def test_full_gate_failure_does_not_replace_checkpoint

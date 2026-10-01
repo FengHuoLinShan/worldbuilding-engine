@@ -250,7 +250,7 @@ module Worldcheck
         issue("frontmatter-missing", source_id, "页面缺少 YAML Frontmatter")
         return [{}, text]
       end
-      data = YAML.safe_load(match[1], [Date], [], false)
+      data = YAML.safe_load(match[1], permitted_classes: [Date], permitted_symbols: [], aliases: false)
       unless data.is_a?(Hash)
         issue("frontmatter-invalid", source_id, "Frontmatter 必须是键值对象")
         data = {}
