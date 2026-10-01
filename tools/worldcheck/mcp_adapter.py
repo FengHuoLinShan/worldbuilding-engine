@@ -10,9 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 CLI = str(Path(__file__).with_name("worldcheck"))
-RUBY = "/usr/bin/ruby"
+RUBY = "ruby"
 PROTOCOL_VERSION = "2025-11-25"
 SERVER_INSTRUCTIONS = (
     "Use worldcheck for configured worldbook validation: call worldcheck_status first; "
@@ -257,24 +256,24 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
     config = os.environ.get("WORLDCHECK_CONFIG")
     if not config:
         raise ToolError("WORLDCHECK_CONFIG is required")
+    config = str(Path(config).expanduser().resolve())
     try:
         completed = subprocess.run(
             [RUBY, CLI, *args, "--config", config, "--json"],
+            cwd=Path(config).expanduser().parent,
             input=stdin,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=60,
             check=False,
             shell=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ToolError(f"worldcheck CLI unavailable: {exc}") from exc
+        raise ToolError("worldcheck CLI unavailable or timed out") from exc
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        detail = completed.stderr.strip() or f"exit {completed.returncode}"
-        raise ToolError(f"worldcheck CLI returned invalid JSON: {detail}") from exc
+        raise ToolError(f"worldcheck CLI returned invalid JSON: exit {completed.returncode}") from exc
     if completed.returncode == 2:
         issues = payload.get("issues", [])
         detail = issues[0].get("message", "invalid request") if issues else "invalid request"
@@ -284,6 +283,11 @@ def run_cli(args: list[str], stdin: str | None = None) -> dict[str, Any]:
     return payload
 
 
+def validate_target(target):
+    if not isinstance(target, str) or not target.strip() or len(target) > 1000 or target.startswith("-") or any(ord(char) < 32 for char in target):
+        raise ToolError("target must be a non-empty page reference, not a command option")
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == "worldcheck_prepare_review":
         if set(arguments) - {"targets", "budget_chars"}:
@@ -291,11 +295,15 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         targets = arguments.get("targets", [])
         if not isinstance(targets, list) or not all(isinstance(item, str) for item in targets):
             raise ToolError("targets must be an array of strings")
+        if len(targets) > 512:
+            raise ToolError("at most 512 review targets are allowed")
+        for target in targets:
+            validate_target(target)
         args = ["review", *targets]
         if "budget_chars" in arguments:
             budget = arguments["budget_chars"]
-            if not isinstance(budget, int) or isinstance(budget, bool) or budget < 2000:
-                raise ToolError("budget_chars must be an integer >= 2000")
+            if not isinstance(budget, int) or isinstance(budget, bool) or not 2000 <= budget <= 200_000:
+                raise ToolError("budget_chars must be an integer from 2000 to 200000")
             args += ["--budget-chars", str(budget)]
         payload = run_cli(args)
         if "packet" not in payload:
@@ -321,6 +329,8 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         target = arguments.get("target")
         if target is not None and not isinstance(target, str):
             raise ToolError("target must be a string")
+        if target is not None:
+            validate_target(target)
         return run_cli(["status"] + ([target] if target else []))
     raise ToolError(f"unknown tool: {name}")
 
@@ -373,6 +383,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> int:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -380,16 +392,16 @@ def main() -> int:
         try:
             request = json.loads(line)
             if not isinstance(request, dict):
-                raise ValueError("request must be an object")
+                raise TypeError("request must be an object")
             response = handle(request)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
             response = {
                 "jsonrpc": "2.0",
                 "id": None,
                 "error": {"code": -32700, "message": str(exc)},
             }
-        except Exception as exc:  # Last-resort containment: stdout must remain JSON-RPC only.
-            print(f"worldcheck adapter error: {exc}", file=sys.stderr)
+        except Exception:  # noqa: BLE001 - Protocol boundary: stdout remains JSON-RPC and errors expose no internals.
+            print("worldcheck adapter internal error", file=sys.stderr)
             response = {
                 "jsonrpc": "2.0",
                 "id": request.get("id") if isinstance(request, dict) else None,

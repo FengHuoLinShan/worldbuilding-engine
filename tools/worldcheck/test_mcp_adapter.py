@@ -11,7 +11,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("worldcheck_mcp", HERE / "mcp_adapter.py")
 assert SPEC and SPEC.loader
@@ -45,7 +44,7 @@ class McpAdapterTest(unittest.TestCase):
             {"ok": True, "command": "review-record", "recorded": True, "status": "pass", "issues": []},
             {"ok": True, "command": "status", "issues": []},
         ]
-        with mock.patch.object(MCP, "run_cli", side_effect=responses) as run:
+        with mock.patch.object(MCP, "run_cli", autospec=True, side_effect=responses) as run:
             calls = [
                 ("worldcheck_prepare_review", {"targets": ["Alpha"], "budget_chars": 3000}),
                 (
@@ -96,31 +95,36 @@ class McpAdapterTest(unittest.TestCase):
             stderr="",
         )
         with mock.patch.dict(os.environ, {"WORLDCHECK_CONFIG": "/safe/project/worldcheck.json"}):
-            with mock.patch.object(MCP.subprocess, "run", return_value=failed) as run:
-                with self.assertRaisesRegex(MCP.ToolError, "bad receipt"):
-                    MCP.run_cli(["status"])
+            with mock.patch.object(MCP.subprocess, "run", autospec=True, return_value=failed) as run, self.assertRaisesRegex(MCP.ToolError, "bad receipt"):
+                MCP.run_cli(["status"])
             self.assertEqual(
                 [MCP.RUBY, MCP.CLI, "status", "--config", "/safe/project/worldcheck.json", "--json"],
                 run.call_args.args[0],
             )
+            self.assertEqual(Path("/safe/project"), run.call_args.kwargs["cwd"])
             invalid = subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr="")
-            with mock.patch.object(MCP.subprocess, "run", return_value=invalid):
-                with self.assertRaisesRegex(MCP.ToolError, "invalid JSON: exit 0"):
-                    MCP.run_cli(["status"])
+            with mock.patch.object(MCP.subprocess, "run", autospec=True, return_value=invalid), self.assertRaisesRegex(MCP.ToolError, "invalid JSON: exit 0"):
+                MCP.run_cli(["status"])
             blocked = subprocess.CompletedProcess(
                 args=[], returncode=126, stdout="", stderr="sandbox denied child process"
             )
-            with mock.patch.object(MCP.subprocess, "run", return_value=blocked):
-                with self.assertRaisesRegex(MCP.ToolError, "sandbox denied child process"):
-                    MCP.run_cli(["status"])
-            with mock.patch.object(MCP.subprocess, "run", side_effect=subprocess.TimeoutExpired([], 60)):
-                with self.assertRaisesRegex(MCP.ToolError, "unavailable"):
-                    MCP.run_cli(["status"])
+            with mock.patch.object(MCP.subprocess, "run", autospec=True, return_value=blocked), self.assertRaisesRegex(MCP.ToolError, "exit 126"):
+                MCP.run_cli(["status"])
+            with mock.patch.object(MCP.subprocess, "run", autospec=True, side_effect=subprocess.TimeoutExpired([], 60)), self.assertRaisesRegex(MCP.ToolError, "unavailable"):
+                MCP.run_cli(["status"])
 
     def test_cli_requires_environment_config(self) -> None:
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(MCP.ToolError, "WORLDCHECK_CONFIG is required"):
-                MCP.run_cli(["status"])
+        with mock.patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(MCP.ToolError, "WORLDCHECK_CONFIG is required"):
+            MCP.run_cli(["status"])
+
+    def test_targets_cannot_inject_cli_options(self) -> None:
+        for target in ["--record", "--config", "--full", "", "\nAlpha", "-", "x" * 1001]:
+            with mock.patch.object(MCP, "run_cli", autospec=True) as run:
+                with self.assertRaises(MCP.ToolError):
+                    MCP.call_tool("worldcheck_prepare_review", {"targets": [target]})
+                with self.assertRaises(MCP.ToolError):
+                    MCP.call_tool("worldcheck_status", {"target": target})
+                run.assert_not_called()
 
     def test_stdio_stdout_is_json_rpc_only(self) -> None:
         requests = "\n".join(
@@ -135,8 +139,7 @@ class McpAdapterTest(unittest.TestCase):
             [sys.executable, str(HERE / "mcp_adapter.py")],
             input=requests,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=True,
         )
         lines = completed.stdout.splitlines()

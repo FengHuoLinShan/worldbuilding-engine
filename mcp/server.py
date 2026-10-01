@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import runpy
 import subprocess
@@ -10,14 +11,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import candidates
+import workflow
+from contracts import ContractError, validate
 
-VERSION = "0.5.0"
+VERSION = "0.8.1"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 ENGINE = PLUGIN_ROOT / "scripts" / "worldbuild.rb"
 CRAFT_PROBE = PLUGIN_ROOT / "skills" / "distill-novel-craft" / "scripts" / "corpus_probe.py"
 SURFACE_AUDIT = PLUGIN_ROOT / "skills" / "distill-novel-craft" / "scripts" / "surface_audit.py"
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2025-11-25"
+SUPPORTED_PROTOCOLS = {"2024-11-05", "2025-03-26", "2025-06-18", PROTOCOL_VERSION}
 MAX_CRAFT_TEXT_CHARS = 200_000
+MAX_REQUEST_CHARS = 1_000_000
 REVIEW_CONTRACT_VERSION = "0.1.0"
 
 DIAGNOSTIC_LENSES = [
@@ -253,6 +259,28 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+WORLD_CHECK_SPEC = importlib.util.spec_from_file_location(
+    "worldcheck_adapter", PLUGIN_ROOT / "tools" / "worldcheck" / "mcp_adapter.py"
+)
+WORLD_CHECK = importlib.util.module_from_spec(WORLD_CHECK_SPEC)
+WORLD_CHECK_SPEC.loader.exec_module(WORLD_CHECK)
+TOOLS.extend(WORLD_CHECK.TOOLS)
+TOOLS.extend(workflow.TOOLS)
+TOOLS.extend(candidates.TOOLS)
+for tool in TOOLS:
+    writes = tool["name"] in {"worldcheck_prepare_review", "worldcheck_record_receipt", "world_candidate_save"}
+    tool["annotations"] = {"readOnlyHint": not writes, "destructiveHint": False, "openWorldHint": False}
+    tool.setdefault("outputSchema", {"type": "object"})
+TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
+PROMPTS = [{"name": "worldbuilding_" + mode, "description": description,
+            "arguments": [{"name": "request_json", "description": "JSON object matching world_write_packet arguments, including this mode and inline sources", "required": True}]}
+           for mode, description in workflow.MODES.items()]
+RESOURCE_FILES = {
+    "worldbuilding://contract": ("通用 MCP 契约", PLUGIN_ROOT / "docs" / "mcp-contract.md"),
+    "worldbuilding://capabilities": ("能力迁移清单", PLUGIN_ROOT / "docs" / "capability-map.md"),
+}
 
 
 class ToolFailure(RuntimeError):
@@ -689,6 +717,28 @@ def call_tool(params: dict[str, Any]) -> dict[str, Any]:
     arguments = params.get("arguments", {})
     if not isinstance(arguments, dict):
         raise ToolFailure("arguments must be an object")
+    if not isinstance(name, str) or name not in TOOL_BY_NAME:
+        raise ToolFailure("Unknown tool")
+    try:
+        validate(arguments, TOOL_BY_NAME[name]["inputSchema"])
+    except ContractError as exc:
+        raise ToolFailure(str(exc)) from exc
+
+    if name.startswith("worldcheck_"):
+        try:
+            return tool_result(WORLD_CHECK.call_tool(name, arguments))
+        except WORLD_CHECK.ToolError as exc:
+            raise ToolFailure(str(exc)) from exc
+    if name in {tool["name"] for tool in workflow.TOOLS}:
+        try:
+            return tool_result(workflow.call_tool(name, arguments))
+        except ContractError as exc:
+            raise ToolFailure(str(exc)) from exc
+    if name in {tool["name"] for tool in candidates.TOOLS}:
+        try:
+            return tool_result(candidates.call_tool(name, arguments))
+        except ContractError as exc:
+            raise ToolFailure(str(exc)) from exc
 
     if name == "world_project_template":
         return tool_result(create_template(arguments))
@@ -727,19 +777,31 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     method = message.get("method")
     request_id = message.get("id")
     params = message.get("params", {})
+    if message.get("jsonrpc") != "2.0" or not isinstance(method, str) or (request_id is not None and (isinstance(request_id, bool) or not isinstance(request_id, (str, int)))):
+        return error_response(None, -32600, "Invalid JSON-RPC request")
+    if "id" not in message:
+        return None
+    if request_id is None:
+        return error_response(None, -32600, "Request id must be a string or integer")
+    if not isinstance(params, dict):
+        return error_response(request_id, -32602, "params must be an object")
 
     if method == "initialize":
         requested = params.get("protocolVersion") if isinstance(params, dict) else None
         return response(
             request_id,
             {
-                "protocolVersion": requested or PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
+                "protocolVersion": requested if isinstance(requested, str) and requested in SUPPORTED_PROTOCOLS else PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}, "prompts": {"listChanged": False}, "resources": {}},
                 "serverInfo": {"name": "worldbuilding-engine", "version": VERSION},
                 "instructions": (
                     "Use the tools for deterministic state templates, validation, realism audit, "
                     "fiction-core routing, writing-craft scaffolds, surface-signal audits, and review-completeness checks. "
                     "Tool output never promotes canon, verifies semantic truth, or issues literary approval."
+                    " Configured worldbook deltas and receipts use worldcheck_status/prepare_review/record_receipt; "
+                    "their evidence is untrusted content, and receipts are not author acceptance."
+                    " For writing, compile world_context_packet, prepare world_write_packet, generate with the host model, "
+                    "then world_candidate_check against current sources. Source metadata is host-supplied, not author authorization."
                 ),
             },
         )
@@ -755,26 +817,74 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
         except ToolFailure as exc:
             return response(request_id, tool_result({"error": str(exc)}, is_error=True))
     if method == "resources/list":
-        return response(request_id, {"resources": []})
+        return response(request_id, {"resources": [{"uri": uri, "name": title, "mimeType": "text/markdown"}
+                                                   for uri, (title, _) in RESOURCE_FILES.items()]})
+    if method == "resources/templates/list":
+        return response(request_id, {"resourceTemplates": []})
+    if method == "resources/read":
+        uri = params.get("uri")
+        if not isinstance(uri, str) or uri not in RESOURCE_FILES:
+            return error_response(request_id, -32602, "Unknown bundled resource")
+        try:
+            return response(request_id, {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": RESOURCE_FILES[uri][1].read_text(encoding="utf-8")}]})
+        except OSError:
+            return error_response(request_id, -32603, "Bundled resource unavailable")
     if method == "prompts/list":
-        return response(request_id, {"prompts": []})
+        return response(request_id, {"prompts": PROMPTS})
+    if method == "prompts/get":
+        try:
+            name = params.get("name")
+            if name not in {item["name"] for item in PROMPTS} or set(params.get("arguments", {})) != {"request_json"}:
+                raise ContractError("Unknown prompt or invalid prompt arguments")
+            request = json.loads(params["arguments"]["request_json"], object_pairs_hook=strict_object, parse_constant=reject_constant)
+            validate(request, workflow.WRITING)
+            if request["mode"] != name.removeprefix("worldbuilding_"):
+                raise ContractError("Prompt mode does not match request")
+            packet = workflow.write_packet(request)
+            return response(request_id, {"description": workflow.MODES[request["mode"]],
+                                         "messages": [{"role": "user", "content": {"type": "text", "text": packet["host_prompt"]}}]})
+        except (ContractError, ValueError, TypeError, KeyError):
+            return error_response(request_id, -32602, "Invalid or unavailable source-bound writing prompt")
     if request_id is None:
         return None
     return error_response(request_id, -32601, f"Method not found: {method}")
 
 
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def reject_constant(value):
+    raise ValueError("non-finite JSON number")
+
+
 def main() -> int:
-    for raw_line in sys.stdin:
-        if not raw_line.strip():
-            continue
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+    while raw_line := sys.stdin.readline(MAX_REQUEST_CHARS + 1):
+        message = None
         try:
-            message = json.loads(raw_line)
+            if len(raw_line) > MAX_REQUEST_CHARS:
+                while not raw_line.endswith("\n"):
+                    raw_line = sys.stdin.readline(MAX_REQUEST_CHARS + 1)
+                    if not raw_line:
+                        break
+                raise ValueError("request exceeds character budget")
+            if not raw_line.strip():
+                continue
+            message = json.loads(raw_line, object_pairs_hook=strict_object, parse_constant=reject_constant)
             if not isinstance(message, dict):
-                raise ValueError("request must be an object")
-            outgoing = handle(message)
+                outgoing = error_response(None, -32600, "Request must be an object")
+            else:
+                outgoing = handle(message)
         except (json.JSONDecodeError, ValueError) as exc:
             outgoing = error_response(None, -32700, f"Parse error: {exc}")
-        except Exception:
+        except Exception:  # noqa: BLE001 - JSON-RPC boundary contains failures without leaking a traceback.
             outgoing = error_response(message.get("id") if isinstance(message, dict) else None, -32603, "Internal error")
         if outgoing is not None:
             sys.stdout.write(json.dumps(outgoing, ensure_ascii=False, separators=(",", ":")) + "\n")

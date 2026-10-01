@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from typing import Any
-
 
 SERVER = Path(__file__).resolve().with_name("server.py")
 LENSES = [
@@ -22,7 +22,7 @@ LENSES = [
 class MCPServerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.process = subprocess.Popen(
-            ["python3", str(SERVER)],
+            [sys.executable, str(SERVER)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -61,16 +61,44 @@ class MCPServerTest(unittest.TestCase):
             {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
         )
         self.assertEqual("worldbuilding-engine", initialized["result"]["serverInfo"]["name"])
-        self.assertEqual("0.5.0", initialized["result"]["serverInfo"]["version"])
+        self.assertEqual("0.8.1", initialized["result"]["serverInfo"]["version"])
         listed = self.request("tools/list", {}, request_id=2)
         names = {tool["name"] for tool in listed["result"]["tools"]}
         self.assertEqual(
             {
                 "world_project_template", "world_validate", "world_audit", "world_route",
                 "world_craft_packet", "world_text_surface_audit", "world_craft_review_check",
+                "worldcheck_status", "worldcheck_prepare_review", "worldcheck_record_receipt",
+                "world_evidence_search", "world_context_packet", "world_write_packet", "world_candidate_check",
+                "world_change_impact", "world_candidate_save", "world_candidate_read",
             },
             names,
         )
+
+    def test_contract_and_protocol_fail_closed(self) -> None:
+        for name, arguments in [
+            ("world_project_template", {"title": "x", "seed": "y", "path": "/private"}),
+            ("worldcheck_prepare_review", {"targets": ["x"], "budget_chars": True}),
+            ("worldcheck_record_receipt", {"packet_hash": "bad", "receipt": {}}),
+        ]:
+            self.assertTrue(self.call(name, arguments, 50)["isError"])
+        negotiated = self.request("initialize", {"protocolVersion": "invented"}, 51)
+        self.assertEqual("2025-11-25", negotiated["result"]["protocolVersion"])
+
+    def test_surface_extreme_chapter_gap_and_negative_threshold_are_bounded(self) -> None:
+        result = self.call("world_text_surface_audit", {
+            "text": "### 第1章 起点\n他搬盐。\n### 第999999999章 终点\n他停下。",
+            "scope_manifest": {"scope_kind": "chapter_sample"},
+        }, 60)["structuredContent"]
+        self.assertEqual(999999997, result["parse"]["missing_chapter_count"])
+        self.assertEqual(1000, len(result["parse"]["missing_chapter_numbers"]))
+        self.assertTrue(result["parse"]["missing_chapter_numbers_truncated"])
+        self.assertEqual("FAIL", result["gates"]["surface_regression_gate"])
+        failed = self.call("world_text_surface_audit", {
+            "text": "他搬盐。", "scope_manifest": {"scope_kind": "excerpt"},
+            "policy": {"thresholds": {"repeated_phrase_length": -999999999}},
+        }, 61)
+        self.assertTrue(failed["isError"])
 
     def test_template_validate_audit_and_route(self) -> None:
         template = self.call(

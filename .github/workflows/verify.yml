@@ -1,0 +1,31 @@
+name: Verify generic MCP
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - name: Existing engines and source-bound workflows
+        run: |
+          ruby scripts/test_worldbuild.rb
+          ruby tools/worldcheck/test_worldcheck.rb
+          python3 tools/worldcheck/test_mcp_adapter.py
+          python3 -m unittest discover -s mcp -p 'test_*.py'
+          python3 scripts/test_bundle.py
+          git diff --check
+      - name: Official SDK interoperability
+        run: |
+          python3 -m pip install 'mcp==2.2.0' 'jsonschema==4.26.0'
+          python3 mcp/verify_sdk.py
