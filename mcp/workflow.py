@@ -100,6 +100,16 @@ def tool(name, description, schema):
 
 
 TOOLS = [
+    tool("world_change_impact", "Compute dependent-to-upstream impact closure over an explicit bounded graph. Reports review needs, never edits facts or declares semantics valid.", {
+        "type": "object", "additionalProperties": False, "required": ["node_ids", "changed_ids", "dependencies"],
+        "properties": {
+            "node_ids": IDS, "changed_ids": IDS,
+            "dependencies": {"type": "array", "maxItems": 2048, "items": {
+                "type": "object", "additionalProperties": False, "required": ["from", "to"],
+                "properties": {"from": IDENTITY, "to": IDENTITY},
+            }},
+        },
+    }),
     tool("world_evidence_search", "Search inline sources by literal query; hits are nominations, not authorization or semantic truth.", {
         "type": "object", "additionalProperties": False, "required": ["project_id", "sources", "query"],
         "properties": {"project_id": IDENTITY, "sources": SOURCES, "query": SHORT, "limit": {"type": "integer", "minimum": 1, "maximum": 20}},
@@ -235,8 +245,28 @@ def candidate_check(arguments):
             "review_required": True, "scope": "provenance_and_citations_only"}
 
 
+def change_impact(arguments):
+    nodes = set(arguments["node_ids"])
+    changed = set(arguments["changed_ids"])
+    edges = arguments["dependencies"]
+    if not changed <= nodes or any(edge["from"] not in nodes or edge["to"] not in nodes for edge in edges):
+        raise ContractError("change graph contains unknown references")
+    dependents = {node: set() for node in nodes}
+    for edge in edges:
+        dependents[edge["to"]].add(edge["from"])
+    affected, pending = set(changed), list(changed)
+    while pending:
+        for following in dependents[pending.pop()] - affected:
+            affected.add(following)
+            pending.append(following)
+    return {"changed_ids": sorted(changed), "affected_ids": sorted(affected),
+            "needs_review": sorted(affected - changed), "edge_direction": "dependent_to_upstream",
+            "coverage": "supplied_graph_only", "semantic_truth_verified": False}
+
+
 def call_tool(name, arguments):
     handlers = {"world_evidence_search": evidence_search, "world_context_packet": context_packet,
-                "world_write_packet": write_packet, "world_candidate_check": candidate_check}
+                "world_write_packet": write_packet, "world_candidate_check": candidate_check,
+                "world_change_impact": change_impact}
     validate(arguments, next(item["inputSchema"] for item in TOOLS if item["name"] == name))
     return handlers[name](arguments)

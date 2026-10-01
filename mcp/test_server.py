@@ -70,6 +70,7 @@ class MCPServerTest(unittest.TestCase):
                 "world_craft_packet", "world_text_surface_audit", "world_craft_review_check",
                 "worldcheck_status", "worldcheck_prepare_review", "worldcheck_record_receipt",
                 "world_evidence_search", "world_context_packet", "world_write_packet", "world_candidate_check",
+                "world_change_impact", "world_candidate_save", "world_candidate_read",
             },
             names,
         )

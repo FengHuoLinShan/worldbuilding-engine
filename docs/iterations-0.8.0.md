@@ -20,7 +20,10 @@
 
 ## 第3轮：候选与变化
 
-执行中。
+- 新增固定项目候选保存/精确历史读取、SQLite 短事务、预期 head CAS、operation_id 回执幂等与 no_change；默认关闭、没有删除或 canon 写入接口。
+- 增加变更影响闭包：按 dependent → upstream 计算跨 World/Story/Scene 影响；循环也可终止，未知引用拒绝。
+- `python3 mcp/test_candidates.py`：4 tests，通过保存/重试/旧历史/冲突/源变化/不同项目/两线程竞争/默认关闭与无写入读取。
+- workflow 7 tests、主 MCP 9 tests 通过。读取旧稿标记 not_revalidated，不能冒充当前资料已核实。
 
 ## 第4轮：对抗与互操作
 

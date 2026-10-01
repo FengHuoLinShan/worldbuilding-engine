@@ -13,6 +13,7 @@ from typing import Any
 
 from contracts import ContractError, validate
 import workflow
+import candidates
 
 
 VERSION = "0.8.0"
@@ -267,8 +268,9 @@ WORLD_CHECK = importlib.util.module_from_spec(WORLD_CHECK_SPEC)
 WORLD_CHECK_SPEC.loader.exec_module(WORLD_CHECK)
 TOOLS.extend(WORLD_CHECK.TOOLS)
 TOOLS.extend(workflow.TOOLS)
+TOOLS.extend(candidates.TOOLS)
 for tool in TOOLS:
-    writes = tool["name"] in {"worldcheck_prepare_review", "worldcheck_record_receipt"}
+    writes = tool["name"] in {"worldcheck_prepare_review", "worldcheck_record_receipt", "world_candidate_save"}
     tool["annotations"] = {"readOnlyHint": not writes, "destructiveHint": False, "openWorldHint": False}
     tool.setdefault("outputSchema", {"type": "object"})
 TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
@@ -723,6 +725,11 @@ def call_tool(params: dict[str, Any]) -> dict[str, Any]:
     if name in {tool["name"] for tool in workflow.TOOLS}:
         try:
             return tool_result(workflow.call_tool(name, arguments))
+        except ContractError as exc:
+            raise ToolFailure(str(exc)) from exc
+    if name in {tool["name"] for tool in candidates.TOOLS}:
+        try:
+            return tool_result(candidates.call_tool(name, arguments))
         except ContractError as exc:
             raise ToolFailure(str(exc)) from exc
 

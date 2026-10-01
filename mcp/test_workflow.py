@@ -30,6 +30,17 @@ def candidate(req):
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_transitive_impacts_cycles_and_unknown_references(self):
+        args = {"node_ids": ["rule", "place", "scene", "unrelated"], "changed_ids": ["rule"],
+                "dependencies": [{"from": "place", "to": "rule"}, {"from": "scene", "to": "place"},
+                                 {"from": "rule", "to": "scene"}]}
+        result = w.call_tool("world_change_impact", args)
+        self.assertEqual(["place", "rule", "scene"], result["affected_ids"])
+        self.assertEqual(["place", "scene"], result["needs_review"])
+        args["dependencies"].append({"from": "missing", "to": "rule"})
+        with self.assertRaisesRegex(ContractError, "unknown"):
+            w.call_tool("world_change_impact", args)
+
     def test_full_generation_binding_and_unicode_citation(self):
         req = request()
         packet = w.call_tool("world_write_packet", req)
