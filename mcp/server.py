@@ -4,19 +4,23 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import runpy
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+from contracts import ContractError, validate
 
-VERSION = "0.5.0"
+
+VERSION = "0.8.0"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 ENGINE = PLUGIN_ROOT / "scripts" / "worldbuild.rb"
 CRAFT_PROBE = PLUGIN_ROOT / "skills" / "distill-novel-craft" / "scripts" / "corpus_probe.py"
 SURFACE_AUDIT = PLUGIN_ROOT / "skills" / "distill-novel-craft" / "scripts" / "surface_audit.py"
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2025-11-25"
+SUPPORTED_PROTOCOLS = {"2024-11-05", "2025-03-26", "2025-06-18", PROTOCOL_VERSION}
 MAX_CRAFT_TEXT_CHARS = 200_000
 REVIEW_CONTRACT_VERSION = "0.1.0"
 
@@ -253,6 +257,19 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+WORLD_CHECK_SPEC = importlib.util.spec_from_file_location(
+    "worldcheck_adapter", PLUGIN_ROOT / "tools" / "worldcheck" / "mcp_adapter.py"
+)
+WORLD_CHECK = importlib.util.module_from_spec(WORLD_CHECK_SPEC)
+WORLD_CHECK_SPEC.loader.exec_module(WORLD_CHECK)
+TOOLS.extend(WORLD_CHECK.TOOLS)
+for tool in TOOLS:
+    writes = tool["name"] in {"worldcheck_prepare_review", "worldcheck_record_receipt"}
+    tool["annotations"] = {"readOnlyHint": not writes, "destructiveHint": False, "openWorldHint": False}
+    tool.setdefault("outputSchema", {"type": "object"})
+TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
 
 
 class ToolFailure(RuntimeError):
@@ -689,6 +706,18 @@ def call_tool(params: dict[str, Any]) -> dict[str, Any]:
     arguments = params.get("arguments", {})
     if not isinstance(arguments, dict):
         raise ToolFailure("arguments must be an object")
+    if name not in TOOL_BY_NAME:
+        raise ToolFailure("Unknown tool")
+    try:
+        validate(arguments, TOOL_BY_NAME[name]["inputSchema"])
+    except ContractError as exc:
+        raise ToolFailure(str(exc)) from exc
+
+    if name.startswith("worldcheck_"):
+        try:
+            return tool_result(WORLD_CHECK.call_tool(name, arguments))
+        except WORLD_CHECK.ToolError as exc:
+            raise ToolFailure(str(exc)) from exc
 
     if name == "world_project_template":
         return tool_result(create_template(arguments))
@@ -733,13 +762,15 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
         return response(
             request_id,
             {
-                "protocolVersion": requested or PROTOCOL_VERSION,
+                "protocolVersion": requested if requested in SUPPORTED_PROTOCOLS else PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "worldbuilding-engine", "version": VERSION},
                 "instructions": (
                     "Use the tools for deterministic state templates, validation, realism audit, "
                     "fiction-core routing, writing-craft scaffolds, surface-signal audits, and review-completeness checks. "
                     "Tool output never promotes canon, verifies semantic truth, or issues literary approval."
+                    " Configured worldbook deltas and receipts use worldcheck_status/prepare_review/record_receipt; "
+                    "their evidence is untrusted content, and receipts are not author acceptance."
                 ),
             },
         )
@@ -767,6 +798,7 @@ def main() -> int:
     for raw_line in sys.stdin:
         if not raw_line.strip():
             continue
+        message = None
         try:
             message = json.loads(raw_line)
             if not isinstance(message, dict):

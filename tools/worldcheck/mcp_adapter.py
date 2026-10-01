@@ -12,7 +12,7 @@ from typing import Any
 
 
 CLI = str(Path(__file__).with_name("worldcheck"))
-RUBY = "/usr/bin/ruby"
+RUBY = "ruby"
 PROTOCOL_VERSION = "2025-11-25"
 SERVER_INSTRUCTIONS = (
     "Use worldcheck for configured worldbook validation: call worldcheck_status first; "

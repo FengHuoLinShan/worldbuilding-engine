@@ -61,16 +61,27 @@ class MCPServerTest(unittest.TestCase):
             {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
         )
         self.assertEqual("worldbuilding-engine", initialized["result"]["serverInfo"]["name"])
-        self.assertEqual("0.5.0", initialized["result"]["serverInfo"]["version"])
+        self.assertEqual("0.8.0", initialized["result"]["serverInfo"]["version"])
         listed = self.request("tools/list", {}, request_id=2)
         names = {tool["name"] for tool in listed["result"]["tools"]}
         self.assertEqual(
             {
                 "world_project_template", "world_validate", "world_audit", "world_route",
                 "world_craft_packet", "world_text_surface_audit", "world_craft_review_check",
+                "worldcheck_status", "worldcheck_prepare_review", "worldcheck_record_receipt",
             },
             names,
         )
+
+    def test_contract_and_protocol_fail_closed(self) -> None:
+        for name, arguments in [
+            ("world_project_template", {"title": "x", "seed": "y", "path": "/private"}),
+            ("worldcheck_prepare_review", {"targets": ["x"], "budget_chars": True}),
+            ("worldcheck_record_receipt", {"packet_hash": "bad", "receipt": {}}),
+        ]:
+            self.assertTrue(self.call(name, arguments, 50)["isError"])
+        negotiated = self.request("initialize", {"protocolVersion": "invented"}, 51)
+        self.assertEqual("2025-11-25", negotiated["result"]["protocolVersion"])
 
     def test_template_validate_audit_and_route(self) -> None:
         template = self.call(
