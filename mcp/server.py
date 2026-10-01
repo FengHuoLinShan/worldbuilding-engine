@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from contracts import ContractError, validate
+import workflow
 
 
 VERSION = "0.8.0"
@@ -265,6 +266,7 @@ WORLD_CHECK_SPEC = importlib.util.spec_from_file_location(
 WORLD_CHECK = importlib.util.module_from_spec(WORLD_CHECK_SPEC)
 WORLD_CHECK_SPEC.loader.exec_module(WORLD_CHECK)
 TOOLS.extend(WORLD_CHECK.TOOLS)
+TOOLS.extend(workflow.TOOLS)
 for tool in TOOLS:
     writes = tool["name"] in {"worldcheck_prepare_review", "worldcheck_record_receipt"}
     tool["annotations"] = {"readOnlyHint": not writes, "destructiveHint": False, "openWorldHint": False}
@@ -718,6 +720,11 @@ def call_tool(params: dict[str, Any]) -> dict[str, Any]:
             return tool_result(WORLD_CHECK.call_tool(name, arguments))
         except WORLD_CHECK.ToolError as exc:
             raise ToolFailure(str(exc)) from exc
+    if name in {tool["name"] for tool in workflow.TOOLS}:
+        try:
+            return tool_result(workflow.call_tool(name, arguments))
+        except ContractError as exc:
+            raise ToolFailure(str(exc)) from exc
 
     if name == "world_project_template":
         return tool_result(create_template(arguments))
@@ -771,6 +778,8 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "Tool output never promotes canon, verifies semantic truth, or issues literary approval."
                     " Configured worldbook deltas and receipts use worldcheck_status/prepare_review/record_receipt; "
                     "their evidence is untrusted content, and receipts are not author acceptance."
+                    " For writing, compile world_context_packet, prepare world_write_packet, generate with the host model, "
+                    "then world_candidate_check against current sources. Source metadata is host-supplied, not author authorization."
                 ),
             },
         )
