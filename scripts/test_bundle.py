@@ -24,8 +24,8 @@ def main():
                             cwd=ROOT.parent, text=True, encoding="utf-8", capture_output=True, timeout=20, check=True)
     assert not result.stderr, result.stderr
     messages = [json.loads(line) for line in result.stdout.splitlines()]
-    assert messages[0]["result"]["serverInfo"]["version"] == "0.8.0"
-    assert json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"] == "0.8.0"
+    assert messages[0]["result"]["serverInfo"]["version"] == "0.8.1"
+    assert json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"] == "0.8.1"
     assert len(messages[1]["result"]["tools"]) == 17
     assert len(messages[2]["result"]["prompts"]) == 14
     assert "候选空间" in messages[3]["result"]["contents"][0]["text"]

@@ -61,7 +61,7 @@ class MCPServerTest(unittest.TestCase):
             {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
         )
         self.assertEqual("worldbuilding-engine", initialized["result"]["serverInfo"]["name"])
-        self.assertEqual("0.8.0", initialized["result"]["serverInfo"]["version"])
+        self.assertEqual("0.8.1", initialized["result"]["serverInfo"]["version"])
         listed = self.request("tools/list", {}, request_id=2)
         names = {tool["name"] for tool in listed["result"]["tools"]}
         self.assertEqual(

@@ -15,7 +15,7 @@ import candidates
 import workflow
 from contracts import ContractError, validate
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 ENGINE = PLUGIN_ROOT / "scripts" / "worldbuild.rb"
 CRAFT_PROBE = PLUGIN_ROOT / "skills" / "distill-novel-craft" / "scripts" / "corpus_probe.py"

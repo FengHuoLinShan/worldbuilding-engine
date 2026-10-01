@@ -4,7 +4,7 @@
 
 > A general-purpose toolkit for auditable worldbuilding, candidate review, transferable fiction craft, and content-addressed worldbook checks.
 
-0.8.0 提供一个通用本地 MCP：**17个工具、14个写作/审查提示词、2个契约资源**。
+0.8.1 提供一个通用本地 MCP：**17个工具、14个写作/审查提示词、2个契约资源**。
 可从内联资料完成检索、知识边界、世界观/人物/故事/场景写作交接、引文检查、候选保存与版本读取；原 Worldcheck、世界状态、技法和概念设计能力保留。
 写作由宿主模型完成，无隐藏付费 API、账户密钥或业务数据库依赖；结构/引文检查不会自动采用正典或批准文学质量。
 
@@ -21,12 +21,12 @@
 
 ## 安装 MCP
 
-下载 [v0.8.0 发布包](https://github.com/FengHuoLinShan/worldbuilding-engine/releases/tag/v0.8.0) 并解压，或克隆固定版本：
+下载 [v0.8.1 发布包](https://github.com/FengHuoLinShan/worldbuilding-engine/releases/tag/v0.8.1) 并解压，或克隆固定版本：
 
 ```sh
 git clone https://github.com/FengHuoLinShan/worldbuilding-engine.git
 cd worldbuilding-engine
-git checkout v0.8.0
+git checkout v0.8.1
 python3 scripts/mcp_config.py
 ```
 
@@ -72,4 +72,4 @@ uv run --no-project --with 'mcp==2.2.0' --with 'jsonschema==4.26.0' python mcp/v
 
 ## 权利
 
-本仓库未授予开源许可证。详见 [RIGHTS.md](RIGHTS.md)。
+本仓库代码与文档采用 [MIT 许可证](LICENSE)，允许使用、修改、分发及商业使用；保留版权与许可证声明即可。第三方资料和用户作品的权利边界见 [RIGHTS.md](RIGHTS.md)。
